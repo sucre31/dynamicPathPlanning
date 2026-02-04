@@ -53,6 +53,87 @@ public:
         return s;
     }
 
+    static Scenario CreateSmallOscillatingShortcut() {
+        int size = 16;
+        Scenario s("16x16 Oscillating Shortcut", size, size, 0, size*size-1);
+
+        // 基本構造：中央に太い壁
+        for (int y = 0; y < size; ++y) {
+            if (y == 4 || y == 11) continue; // 2つの隙間
+            s.initialObstacles.push_back({8, y, true});
+        }
+
+        // 変化1：上の隙間を塞ぐ
+        SimulationStep step1;
+        step1.name = "Close Upper Gap";
+        step1.events.push_back({8, 4, true});
+        s.steps.push_back(step1);
+
+        // 変化2：下の隙間を塞いで上を開ける
+        SimulationStep step2;
+        step2.name = "Switch Gap";
+        step2.events.push_back({8, 11, true});
+        step2.events.push_back({8, 4, false});
+        s.steps.push_back(step2);
+
+        return s;
+    }
+
+    static Scenario CreateMidScaleBottleneck64() {
+    int size = 64;
+    Scenario s("64x64 Moving Bottleneck", size, size, 0, size*size-1);
+
+    int wallX = size / 2;
+
+    // 初期：中央に1つだけ gap
+    for (int y = 0; y < size; ++y) {
+        if (y == size / 2) continue;
+        s.initialObstacles.push_back({wallX, y, true});
+    }
+
+    SimulationStep step1;
+    step1.name = "Move Central Gap";
+
+    // 元の gap を塞ぐ
+    step1.events.push_back({wallX, size / 2, true});
+
+    // 新しい gap を同じ壁列に作る
+    step1.events.push_back({wallX, size / 2 + 5, false});
+
+    s.steps.push_back(step1);
+    return s;
+}
+
+
+    static Scenario CreateLargeDynamicWall128() {
+        int size = 128;
+        Scenario s("128x128 Growing Wall", size, size, 0, size*size-1);
+
+        // 初期：薄いランダム障害物
+        std::mt19937 gen(42);
+        std::uniform_real_distribution<> dis(0,1);
+
+        for(int y=0;y<size;y++){
+            for(int x=0;x<size;x++){
+                if((x<3&&y<3)||(x>size-4&&y>size-4)) continue;
+                if(dis(gen)<0.15)
+                    s.initialObstacles.push_back({x,y,true});
+            }
+        }
+
+        // 動的変化：中央に壁が伸びる
+        SimulationStep step1;
+        step1.name = "Vertical Wall Growth";
+        int mx = size/2;
+        for(int y=size/4;y<3*size/4;y++)
+            step1.events.push_back({mx,y,true});
+        s.steps.push_back(step1);
+
+        return s;
+    }
+
+
+
     // 2. U字型トラップ (32x32: m-A*対応)
     static Scenario CreateTrap() {
         int size = 32;
@@ -134,7 +215,7 @@ public:
     }
 
     // 5. 論文の実験結果(Figure 9, 10等)を再現するためのランダムシナリオ
-    static Scenario CreatePaperBenchmark(int size = 128, double initialDensity = 0.2) {
+    static Scenario CreatePaperBenchmark(int size = 128, double initialDensity = 0.3) {
         std::string title = "Paper Benchmark (" + std::to_string(size) + "x" + std::to_string(size) + ")";
         // スタートとゴールは対角線上に配置
         Scenario s(title, size, size, 0, size * size - 1);

@@ -1,19 +1,21 @@
 #include "grid_graph.h"
 #include "astar.h"
 #include "lpastar.h"
+#include "mastar.h"
 #include "mlpastar.h"
+#include "hpastar.h"
 #include "scenario.h"
 #include <iostream>
 #include <iomanip>
 #include <vector>
 
 /**
- * ãƒãƒƒãƒ—è¡¨ç¤ºé–¢æ•°
- * éšœå®³ç‰©(#)ã€ãƒ‘ã‚¹(*)ã€ã‚¹ã‚¿ãƒ¼ãƒˆ(S)ã€ã‚´ãƒ¼ãƒ«(G)ã‚’è¡¨ç¤ºã—ã¾ã™ã€‚
- * ãƒ‘ã‚¹ãŒéšœå®³ç‰©ã¨é‡ãªã£ã¦ã„ã‚‹å ´åˆã¯ 'X' ã‚’è¡¨ç¤ºã—ã¾ã™ã€‚
+ * ƒ}ƒbƒv•\¦—pƒ†[ƒeƒBƒŠƒeƒB
+ * áŠQ•¨(#)AƒpƒX(*)AƒXƒ^[ƒg(S)AƒS[ƒ‹(G)‚ğ•\¦‚µ‚Ü‚·B
+ * ƒpƒX‚ªáŠQ•¨ã‚É‚ ‚éê‡‚Í 'X' ‚ğ•\¦‚µ‚Ü‚·B
  */
 void PrintMap(const GridGraph& graph, const std::vector<NodeID>& path, int width, int height, NodeID start, NodeID goal) {
-    if (width > 50 || height > 50) {
+    if (width > 32 || height > 32) {
         std::cout << "[Map is too large to display]\n";
         return;
     }
@@ -23,19 +25,19 @@ void PrintMap(const GridGraph& graph, const std::vector<NodeID>& path, int width
         for (int x = 0; x < width; ++x) {
             char c = '.';
             int id = y * width + x;
-            
+
             if (graph.IsObstacle(x, y)) c = '#';
-            
+
             bool isPath = false;
-            for(auto pid : path) if(pid == id) isPath = true;
-            
+            for (auto pid : path) if (pid == id) isPath = true;
+
             if (isPath) {
                 c = (c == '#') ? 'X' : '*';
             }
 
             if (id == start) c = 'S';
             else if (id == goal) c = 'G';
-            
+
             std::cout << c << " ";
         }
         std::cout << "\n";
@@ -43,8 +45,8 @@ void PrintMap(const GridGraph& graph, const std::vector<NodeID>& path, int width
 }
 
 /**
- * å®Ÿé¨“å®Ÿè¡Œç”¨é–¢æ•°
- * A*, LPA*, m-LPA* ã®3ç¨®é¡ã‚’æ¯”è¼ƒå®Ÿè¡Œã—ã¾ã™ã€‚
+ * ƒVƒiƒŠƒIÀs
+ * A*, LPA*, m-A*, m-LPA*, HPA* ‚ğ”äŠr‚µ‚Ü‚·B
  */
 void RunExperiment(const Scenario& sc) {
     std::cout << "\n========================================\n";
@@ -55,99 +57,131 @@ void RunExperiment(const Scenario& sc) {
     GridGraph graph(sc.width, sc.height);
     AStar astar;
     LPAStar lpa;
-    MLPAStar mlpa; // è«–æ–‡ã€Œm-LPA*ã€ã«åŸºã¥ãå®Ÿè£…ã‚¯ãƒ©ã‚¹ [cite: 510]
+    MAStar mastar;
+    MLPAStar mlpa;
+    HPAStar hpa;
 
     astar.SetGraph(&graph);
     lpa.SetGraph(&graph);
+    mastar.SetGraph(&graph);
     mlpa.SetGraph(&graph);
+    hpa.SetGraph(&graph);
 
-    // --- ã‚¹ãƒ†ãƒƒãƒ— 0: åˆæœŸè¨­å®šã¨æ¢ç´¢ ---
+    // --- Step 0: ‰Šú’Tõ ---
     for (const auto& obs : sc.initialObstacles) {
         graph.SetObstacle(obs.x, obs.y, obs.blocked);
     }
 
     std::cout << "\n--- [Step 0] Initial Search ---\n";
-    
-    // A* åˆæœŸæ¢ç´¢
+
+    // A* ‰Šú’Tõ
     astar.Initialize(sc.startNode, sc.goalNode);
     astar.ComputePath();
     astar.GetMetrics().Print("A* Initial");
 
-    // LPA* åˆæœŸæ¢ç´¢
+    // LPA* ‰Šú’Tõ
     lpa.Initialize(sc.startNode, sc.goalNode);
     lpa.ComputePath();
     lpa.GetMetrics().Print("LPA* Initial");
 
-    // m-LPA* åˆæœŸæ¢ç´¢ (Algorithm 2: Bottom-Up Fusionã‚’å®Ÿè¡Œ) [cite: 562, 1382]
-    mlpa.Initialize(sc.startNode, sc.goalNode);
-    mlpa.ComputePath();
-    mlpa.GetMetrics().Print("m-LPA* Initial");
+    // M-A* ‰Šú’Tõ
+    //mastar.Initialize(sc.startNode, sc.goalNode);
+    //mastar.ComputePath();
+    //mastar.GetMetrics().Print("m-A* Initial");
+    //std::cout << "[m-A* Preprocess] Time: " << std::fixed << std::setprecision(6)
+    //          << mastar.GetPreprocessSeconds() * 1000.0 << " ms\n";
 
-    // ãƒ‘ã‚¹è¡¨ç¤º
+    // m-LPA* ‰Šú’Tõ
+    //mlpa.Initialize(sc.startNode, sc.goalNode);
+    //mlpa.ComputePath();
+    //mlpa.GetMetrics().Print("m-LPA* Initial");
+
+    // HPA* ‰Šú’Tõ
+    hpa.Initialize(sc.startNode, sc.goalNode);
+    hpa.ComputePath();
+    hpa.GetMetrics().Print("HPA* Initial");
+
+    // ƒpƒX•\¦
     std::cout << "\n<A* Initial Path>\n";
     PrintMap(graph, astar.GetPath(), sc.width, sc.height, sc.startNode, sc.goalNode);
-    
-    std::cout << "\n<m-LPA* Initial Path>\n";
-    PrintMap(graph, mlpa.GetPath(), sc.width, sc.height, sc.startNode, sc.goalNode);
 
-    // --- ã‚¹ãƒ†ãƒƒãƒ— 1ä»¥é™: å‹•çš„ãªç’°å¢ƒå¤‰åŒ– ---
+    std::cout << "\n<LPA* Initial Path>\n";
+    PrintMap(graph, lpa.GetPath(), sc.width, sc.height, sc.startNode, sc.goalNode);
+
+    //std::cout << "\n<m-LPA* Initial Path>\n";
+    //PrintMap(graph, mlpa.GetPath(), sc.width, sc.height, sc.startNode, sc.goalNode);
+
+    std::cout << "\n<HPA* Initial Path>\n";
+    PrintMap(graph, hpa.GetPath(), sc.width, sc.height, sc.startNode, sc.goalNode);
+
+    // --- Step 1+: “®“IƒCƒxƒ“ƒg ---
     for (size_t i = 0; i < sc.steps.size(); ++i) {
         const auto& step = sc.steps[i];
         std::cout << "\n--- [Step " << i + 1 << "] " << step.name << " ---\n";
 
-        // éšœå®³ç‰©ã®æ›´æ–°
         for (const auto& ev : step.events) {
             graph.SetObstacle(ev.x, ev.y, ev.blocked);
         }
 
-        // 1. A* Replan (å¸¸ã«ã‚¼ãƒ­ã‹ã‚‰å†è¨ˆç®—)
+        // 1. A* Replan
         astar.Initialize(sc.startNode, sc.goalNode);
         astar.ComputePath();
         astar.GetMetrics().Print("A* Replan");
 
-        // 2. LPA* Replan (å¢—åˆ†æ›´æ–°)
+        // 2. LPA* Replan (“®“IXV)
         lpa.ResetMetrics();
         for (const auto& ev : step.events) {
             int id = ev.y * sc.width + ev.x;
-            lpa.NotifyObstacleChange(id, ev.blocked); 
+            lpa.NotifyObstacleChange(id, ev.blocked);
         }
         lpa.ComputePath();
         lpa.GetMetrics().Print("LPA* Replan");
 
-        // 3. m-LPA* Replan (Algorithm 1 & 3: å±€æ‰€å†åˆ†å‰²ã¨å¢—åˆ†æ¢ç´¢) [cite: 510, 696]
-        mlpa.ResetMetrics();
-        for (const auto& ev : step.events) {
-            int id = ev.y * sc.width + ev.x;
-            // å¤‰åŒ–ãŒã‚ã£ãŸç®‡æ‰€ã®æ­£æ–¹å½¢ã®ã¿ã‚’ç‰¹å®šã—ã€ãƒ“ãƒ¼ãƒ ãƒ¬ãƒƒãƒˆã‚’å†è¨ˆç®— [cite: 601, 677]
-            mlpa.NotifyObstacleChange(id, ev.blocked); 
-        }
-        mlpa.ComputePath();
-        mlpa.GetMetrics().Print("m-LPA* Replan");
+        // 3. m-A* Replan (static method: re-preprocess)
+        //mastar.ResetMetrics();
+        //mastar.Initialize(sc.startNode, sc.goalNode);
+        //mastar.ComputePath();
+        //mastar.GetMetrics().Print("m-A* Replan");
+        //std::cout << "[m-A* Preprocess] Time: " << std::fixed << std::setprecision(6)
+        //         << mastar.GetPreprocessSeconds() * 1000.0 << " ms\n";
 
-        // å„ã‚¢ãƒ«ã‚´ãƒªã‚ºãƒ ã®å†è¨ˆç”»çµæœã‚’è¡¨ç¤º
+        // 4. m-LPA* Replan
+        //mlpa.ResetMetrics();
+        //for (const auto& ev : step.events) {
+        //    int id = ev.y * sc.width + ev.x;
+        //    mlpa.NotifyObstacleChange(id, ev.blocked);
+        //}
+        //mlpa.ComputePath();
+        //mlpa.GetMetrics().Print("m-LPA* Replan");
+
+        // 5. HPA* Replan (static method: rebuild abstraction)
+        hpa.ResetMetrics();
+        hpa.Initialize(sc.startNode, sc.goalNode);
+        hpa.ComputePath();
+        hpa.GetMetrics().Print("HPA* Replan");
+
         std::cout << "\n<A* Replan Path>\n";
         PrintMap(graph, astar.GetPath(), sc.width, sc.height, sc.startNode, sc.goalNode);
 
         std::cout << "\n<LPA* Replan Path>\n";
         PrintMap(graph, lpa.GetPath(), sc.width, sc.height, sc.startNode, sc.goalNode);
 
-        std::cout << "\n<m-LPA* Replan Path>\n";
-        PrintMap(graph, mlpa.GetPath(), sc.width, sc.height, sc.startNode, sc.goalNode);
+        //std::cout << "\n<m-A* Replan Path>\n";
+        //PrintMap(graph, mastar.GetPath(), sc.width, sc.height, sc.startNode, sc.goalNode);
+
+        //
+        
+        //std::cout << "\n<m-LPA* Replan Path>\n";
+        //PrintMap(graph, mlpa.GetPath(), sc.width, sc.height, sc.startNode, sc.goalNode);
+
+        std::cout << "\n<HPA* Replan Path>\n";
+        PrintMap(graph, hpa.GetPath(), sc.width, sc.height, sc.startNode, sc.goalNode);
     }
 }
 
 int main() {
-    // è«–æ–‡ã®å‰ææ¡ä»¶é€šã‚Šã€Dyadic(2ã®ã¹ãä¹—)ã‚µã‚¤ã‚ºã®ãƒãƒƒãƒ—ã§ãƒ†ã‚¹ãƒˆ [cite: 1276]
-    // 1. Simple Wall (16x16)
-    RunExperiment(Scenario::CreateSimpleWall());
-    
-    // 2. Trap (32x32)
-    RunExperiment(Scenario::CreateTrap());
-    
-    // 3. Bottleneck (32x32)
-    RunExperiment(Scenario::CreateBottleneck());
-    
-    RunExperiment(Scenario::CreatePaperBenchmark());
-
+    RunExperiment(Scenario::CreateSmallOscillatingShortcut());
+    RunExperiment(Scenario::CreateMidScaleBottleneck64());
+    RunExperiment(Scenario::CreateLargeDynamicWall128());
     return 0;
 }

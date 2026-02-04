@@ -1,253 +1,392 @@
 #pragma once
 #include "common.h"
 #include <vector>
-#include <set>
-#include <algorithm>
-#include <tuple>
 #include <cmath>
 #include <limits>
+#include <algorithm>
+#include <iostream>
+
+// ‚‘¬‰»‚Ì‚½‚ß‚Ì’è”’è‹`
+constexpr double INF_VAL = std::numeric_limits<double>::infinity();
 
 class LPAStar : public ISolver {
-protected:
-    // å„ªå…ˆåº¦ã‚­ãƒ¼
+private:
+    // ----------------------------------------------------------------------
+    // 1. ‚‘¬‰»‚Ì‚½‚ß‚Ìƒf[ƒ^\‘¢
+    // ----------------------------------------------------------------------
+
+    // —Dæ“xƒL[i”äŠr‰‰Z‚ğƒCƒ“ƒ‰ƒCƒ“‰»‚µ‚Ä‚‘¬‰»j
     struct Key {
         double k1; // min(g, rhs) + h
         double k2; // min(g, rhs)
 
-        // è¾æ›¸é †æ¯”è¼ƒ (Lexicographical order)
+        // ‚‘¬‚È”äŠr‰‰Zq
         bool operator<(const Key& other) const {
             if (std::abs(k1 - other.k1) > EPS) return k1 < other.k1;
-            return k2 < other.k2 - EPS;
+            return k2 < other.k2 - EPS; // k1‚ª“™‚µ‚¢ê‡‚Ík2‚Å”äŠr
         }
-        bool operator>(const Key& other) const { return other < *this; }
+        
+        bool operator>(const Key& other) const {
+            if (std::abs(k1 - other.k1) > EPS) return k1 > other.k1;
+            return k2 > other.k2 + EPS;
+        }
+
         bool operator<=(const Key& other) const { return !(*this > other); }
         bool operator>=(const Key& other) const { return !(*this < other); }
-        bool operator==(const Key& other) const {
-            return std::abs(k1 - other.k1) < EPS && std::abs(k2 - other.k2) < EPS;
-        }
-        bool operator!=(const Key& other) const { return !(*this == other); }
     };
 
-    // ãƒãƒ¼ãƒ‰ã®çŠ¶æ…‹
-    struct NodeState {
-        Cost g = INF;
-        Cost rhs = INF;
-        Cost h = 0;
-        NodeID parent = -1; // æœ€é©åŒ–ã®ãŸã‚ã®è¦ªãƒã‚¤ãƒ³ã‚¿ p(s)
+    // ƒm[ƒhî•ñiƒƒ‚ƒŠƒpƒfƒBƒ“ƒO‚ğl—¶‚µ‚Ä”z’uj
+    struct NodeData {
+        double g = INF_VAL;
+        double rhs = INF_VAL;
+        double h = 0.0;
+        // eƒ|ƒCƒ“ƒ^‚Ì‘ã‚í‚è‚Ée‚ÌNodeID‚ğ•ÛiƒpƒX•œŒ³—pj
+        // ¦LPA*‚Å‚ÍŒµ–§‚Èparentƒ|ƒCƒ“ƒ^ŠÇ—‚ª“ï‚µ‚¢‚ªAÀ—pã‚ÍXV‚É‹L˜^‚·‚é
+        int parent = -1; 
+        
+        // ƒq[ƒv“à‚ÌˆÊ’ui-1‚È‚çƒq[ƒv‚É“ü‚Á‚Ä‚¢‚È‚¢j
+        int heapIndex = -1; 
     };
 
-    std::vector<NodeState> states;
-    NodeID startNode = -1;
-    NodeID goalNode = -1;
+    // ----------------------------------------------------------------------
+    // 2. ƒCƒ“ƒfƒbƒNƒX•t‚«ƒoƒCƒiƒŠƒq[ƒv (Indexed Binary Heap)
+    // std::set ‚â std::priority_queue ‚æ‚è‚àXV‚ªˆ³“|“I‚É‘¬‚¢
+    // ----------------------------------------------------------------------
+    class IndexedHeap {
+    private:
+        struct HeapItem {
+            Key key;
+            int u; // NodeID
+        };
+        std::vector<HeapItem> heap;
+        std::vector<NodeData>* nodesPtr; // ŠO•”‚Ìƒm[ƒh”z—ñ‚Ö‚ÌQÆ
 
-    // å„ªå…ˆåº¦ä»˜ãã‚­ãƒ¥ãƒ¼ (Open List)
-    using QueueItem = std::pair<Key, NodeID>;
-    std::set<QueueItem> openList;
-    std::vector<std::set<QueueItem>::iterator> openListRefs;
-    std::vector<bool> inOpenList;
-
-    // ãƒ’ãƒ¥ãƒ¼ãƒªã‚¹ãƒ†ã‚£ãƒƒã‚¯é–¢æ•°
-    Cost H(NodeID u) const {
-        return graph->H(u, goalNode);
-    }
-
-    // Key è¨ˆç®— (CalculateKey)
-    Key CalculateKey(NodeID u) const {
-        double min_g_rhs = std::min(states[u].g, states[u].rhs);
-        return { min_g_rhs + states[u].h, min_g_rhs };
-    }
-
-    // ãƒãƒ¼ãƒ‰ã®æ•´åˆæ€§ã‚’ãƒã‚§ãƒƒã‚¯ã—ã€OpenListã‚’æ›´æ–°ã™ã‚‹
-    void UpdateVertex(NodeID u) {
-        // æ—¢ã«ã‚­ãƒ¥ãƒ¼ã«ã‚ã‚‹å ´åˆã¯å‰Šé™¤ï¼ˆã‚­ãƒ¼æ›´æ–°ã®ãŸã‚ï¼‰
-        if (inOpenList[u]) {
-            openList.erase(openListRefs[u]);
-            inOpenList[u] = false;
+        void Swap(int i, int j) {
+            std::swap(heap[i], heap[j]);
+            (*nodesPtr)[heap[i].u].heapIndex = i;
+            (*nodesPtr)[heap[j].u].heapIndex = j;
         }
 
-        // å±€æ‰€æ•´åˆæ€§ãŒå–ã‚Œã¦ã„ãªã„ (g != rhs) ãªã‚‰ã‚­ãƒ¥ãƒ¼ã«æŒ¿å…¥
-        if (std::abs(states[u].g - states[u].rhs) > EPS) {
-            Key k = CalculateKey(u);
-            auto res = openList.insert({k, u});
-            openListRefs[u] = res.first;
-            inOpenList[u] = true;
-        }
-    }
-
-    // è¦ªãƒãƒ¼ãƒ‰ã‚’å…¨èµ°æŸ»ã—ã¦ rhs ã‚’å†è¨ˆç®—ã™ã‚‹ãƒ˜ãƒ«ãƒ‘ãƒ¼é–¢æ•°
-    // Figure 7 ã® arg min ... ã®éƒ¨åˆ†ã«ç›¸å½“
-    void RecalculateRhs(NodeID u) {
-        if (u == startNode) {
-            states[u].rhs = 0;
-            states[u].parent = -1;
-            return;
-        }
-
-        Cost minRhs = INF;
-        NodeID bestP = -1;
-
-        for (const auto& edge : graph->GetPredecessors(u)) {
-            NodeID pred = edge.target; // GridGraphã®å®Ÿè£…ä¾å­˜: å…¥ã£ã¦ãã‚‹ã‚¨ãƒƒã‚¸ã®å§‹ç‚¹
-            double cost = (states[pred].g == INF) ? INF : (states[pred].g + edge.cost);
-            
-            if (cost < minRhs) {
-                minRhs = cost;
-                bestP = pred;
+        void UpHeap(int i) {
+            while (i > 0) {
+                int p = (i - 1) / 2;
+                if (heap[i].key < heap[p].key) { // Min-Heap
+                    Swap(i, p);
+                    i = p;
+                } else {
+                    break;
+                }
             }
         }
-        states[u].rhs = minRhs;
-        states[u].parent = bestP;
+
+        void DownHeap(int i) {
+            int size = (int)heap.size();
+            while (true) {
+                int left = 2 * i + 1;
+                int right = 2 * i + 2;
+                int smallest = i;
+
+                if (left < size && heap[left].key < heap[smallest].key) {
+                    smallest = left;
+                }
+                if (right < size && heap[right].key < heap[smallest].key) {
+                    smallest = right;
+                }
+
+                if (smallest != i) {
+                    Swap(i, smallest);
+                    i = smallest;
+                } else {
+                    break;
+                }
+            }
+        }
+
+    public:
+        void Initialize(std::vector<NodeData>* nPtr) {
+            nodesPtr = nPtr;
+            heap.clear();
+            heap.reserve(nPtr->size() / 4); // ‚ ‚é’ö“x‚Ì—e—Ê‚ğŠm•Û
+        }
+
+        bool Empty() const { return heap.empty(); }
+
+        // Top‚Ìæ“¾
+        std::pair<Key, int> Top() const {
+            return { heap[0].key, heap[0].u };
+        }
+
+        // Top‚Ìíœ
+        void Pop() {
+            if (heap.empty()) return;
+            int last = (int)heap.size() - 1;
+            (*nodesPtr)[heap[0].u].heapIndex = -1; // íœƒ}[ƒN
+            
+            if (last > 0) {
+                heap[0] = heap[last];
+                (*nodesPtr)[heap[0].u].heapIndex = 0;
+                heap.pop_back();
+                DownHeap(0);
+            } else {
+                heap.pop_back();
+            }
+        }
+
+        // ‘}“ü‚Ü‚½‚ÍXV (Insert or Update)
+        void InsertOrUpdate(int u, Key k) {
+            int idx = (*nodesPtr)[u].heapIndex;
+            if (idx == -1) {
+                // V‹K‘}“ü
+                idx = (int)heap.size();
+                heap.push_back({k, u});
+                (*nodesPtr)[u].heapIndex = idx;
+                UpHeap(idx);
+            } else {
+                // XV
+                Key oldKey = heap[idx].key;
+                heap[idx].key = k;
+                if (k < oldKey) {
+                    UpHeap(idx);
+                } else {
+                    DownHeap(idx);
+                }
+            }
+        }
+
+        // íœ (Remove)
+        void Remove(int u) {
+            int idx = (*nodesPtr)[u].heapIndex;
+            if (idx == -1) return;
+
+            int last = (int)heap.size() - 1;
+            (*nodesPtr)[u].heapIndex = -1;
+
+            if (idx == last) {
+                heap.pop_back();
+            } else {
+                heap[idx] = heap[last];
+                (*nodesPtr)[heap[idx].u].heapIndex = idx;
+                heap.pop_back();
+                // ‚Ç‚¿‚ç‚É“®‚­‚©‚í‚©‚ç‚È‚¢‚Ì‚Å—¼•û‚·i‚ ‚é‚¢‚Í”äŠr‚·‚éj
+                UpHeap(idx);
+                DownHeap(idx);
+            }
+        }
+    };
+
+    // ----------------------------------------------------------------------
+    // ƒƒ“ƒo•Ï”
+    // ----------------------------------------------------------------------
+    std::vector<NodeData> nodes;
+    IndexedHeap openList;
+    int startNode = -1;
+    int goalNode = -1;
+
+    // ----------------------------------------------------------------------
+    // ƒvƒ‰ƒCƒx[ƒgƒƒ\ƒbƒh
+    // ----------------------------------------------------------------------
+    
+    // KeyŒvZ‚ÌƒCƒ“ƒ‰ƒCƒ“‰»
+    inline Key CalculateKey(int u) const {
+        double min_val = std::min(nodes[u].g, nodes[u].rhs);
+        return { min_val + nodes[u].h, min_val };
+    }
+
+    // ’¸“_‚ÌXV (UpdateVertex)
+    void UpdateVertex(int u) {
+        if (u != startNode) {
+            // rhs‚ÌÄŒvZ: ‘SƒvƒŒƒfƒZƒbƒT‚ğŒ©‚é‚Ì‚Å‚Í‚È‚­
+            // ŒÄ‚Ño‚µŒ³‚ÅƒRƒXƒg‚ª”»–¾‚µ‚Ä‚¢‚é‚È‚çA‚»‚±‚©‚çXV‚·‚é‚Ì‚ªÅ‘¬‚¾‚ª
+            // LPA*‚Ì’è‹`ãA‚±‚±‚Å‚Íe‚ğ’T‚·•K—v‚ª‚ ‚éB
+            // ‚µ‚©‚µAGridGraph‚È‚çu‹ß–Tv‚ğŒ©‚é‚¾‚¯‚Å—Ç‚¢B
+            
+            double minRhs = INF_VAL;
+            int bestP = -1;
+            
+            // ‚±‚±‚ªƒ{ƒgƒ‹ƒlƒbƒN‚É‚È‚è‚ª‚¿B
+            // Graph‚ÌÀ‘•‚É‚æ‚Á‚Ä‚Í GetPredecessors ‚ª’x‚¢ê‡‚ª‚ ‚é‚Ì‚Å’ˆÓB
+            // –³ŒüƒOƒ‰ƒt(Undirected)‚È‚ç GetSuccessors ‚Æ“¯‚¶B
+            for (const auto& edge : graph->GetPredecessors(u)) {
+                int pred = edge.target; // Predecessor
+                double g_pred = nodes[pred].g;
+                if (g_pred == INF_VAL) continue;
+
+                double temp = g_pred + edge.cost;
+                if (temp < minRhs) {
+                    minRhs = temp;
+                    bestP = pred;
+                }
+            }
+            nodes[u].rhs = minRhs;
+            nodes[u].parent = bestP;
+        }
+
+        // OpenList‚Ì‘€ì
+        if (std::abs(nodes[u].g - nodes[u].rhs) > EPS) {
+            openList.InsertOrUpdate(u, CalculateKey(u));
+        } else {
+            openList.Remove(u);
+        }
     }
 
 public:
-    void Initialize(NodeID start, NodeID goal) override {
+    void Initialize(int start, int goal) override {
         startNode = start;
         goalNode = goal;
         metrics.Reset();
 
         int nodeCount = graph->GetNodeCount();
-        states.assign(nodeCount, NodeState{});
-        openListRefs.assign(nodeCount, openList.end());
-        inOpenList.assign(nodeCount, false);
-        openList.clear();
-
-        // ãƒ’ãƒ¥ãƒ¼ãƒªã‚¹ãƒ†ã‚£ãƒƒã‚¯ã®è¨ˆç®—
-        for (int i = 0; i < nodeCount; ++i) {
-            states[i].h = H(i);
-            states[i].g = INF;
-            states[i].rhs = INF;
-            states[i].parent = -1;
+        
+        // ƒƒ‚ƒŠÄŠm•Û‚ğ”ğ‚¯‚é
+        if (nodes.size() != (size_t)nodeCount) {
+            nodes.assign(nodeCount, NodeData{});
+            for (int i = 0; i < nodeCount; ++i) {
+                nodes[i].h = graph->H(i, goal);
+            }
+        } else {
+            // ‚‘¬‚ÈƒŠƒZƒbƒg: ‘S‘Ì‚ğƒ‹[ƒv‚·‚é‚æ‚èA
+            // ‘O‰ñ‚Ì’Tõ‚Å‰˜‚ê‚½•”•ª‚¾‚¯’¼‚·‚Ì‚ª‘‚¢‚ªA
+            // ‰‰ñ‚â‘å‚«‚È•ÏX‚Í‘S‘Ì‰Šú‰»‚ª–³“ïB
+            // ‚±‚±‚Å‚Í `std::fill` ‚æ‚è‚àƒ‹[ƒv‚Å\‘¢‘Ì‰Šú‰»‚ğs‚¤
+            for(int i=0; i<nodeCount; ++i) {
+                nodes[i].g = INF_VAL;
+                nodes[i].rhs = INF_VAL;
+                nodes[i].parent = -1;
+                nodes[i].heapIndex = -1;
+                // h‚Í–ˆ‰ñŒvZ‚·‚é‚©ƒLƒƒƒbƒVƒ…‚·‚é‚©B
+                // LPA*‚ÍƒS[ƒ‹‚ª•Ï‚í‚ç‚È‚¢‘O’ñ‚È‚çƒLƒƒƒbƒVƒ…—LŒø
+                nodes[i].h = graph->H(i, goal);
+            }
         }
 
-        // ã‚¹ã‚¿ãƒ¼ãƒˆãƒãƒ¼ãƒ‰ã®åˆæœŸåŒ–
-        states[startNode].rhs = 0;
+        // ƒq[ƒv‚Ì‰Šú‰»
+        openList.Initialize(&nodes);
+
+        // ƒXƒ^[ƒg’n“_‚Ìİ’è
+        nodes[startNode].rhs = 0;
         
-        // ã‚¹ã‚¿ãƒ¼ãƒˆãƒãƒ¼ãƒ‰ã‚’ã‚­ãƒ¥ãƒ¼ã«å…¥ã‚Œã‚‹
-        Key k = CalculateKey(startNode);
-        auto res = openList.insert({k, startNode});
-        openListRefs[startNode] = res.first;
-        inOpenList[startNode] = true;
+        // –¾¦“I‚ÉUpdateVertex‚ğŒÄ‚Ô‘ã‚í‚è‚É’¼ÚInserti­‚µ‚Å‚à‘¬‚­j
+        openList.InsertOrUpdate(startNode, CalculateKey(startNode));
     }
 
-    // æœ€çŸ­çµŒè·¯è¨ˆç®— (Figure 7: ComputeShortestPath)
     bool ComputePath() override {
         Timer timer; timer.Start();
-        if (!graph) return false;
-
-        while (!openList.empty()) {
-            Key topKey = openList.begin()->first;
-            Key goalKey = CalculateKey(goalNode);
-
-            // çµ‚äº†æ¡ä»¶: TopKey >= Key(goal) ã‹ã¤ rhs(goal) == g(goal)
-            if (topKey >= goalKey && std::abs(states[goalNode].rhs - states[goalNode].g) < EPS) {
-                break;
+        
+        // •p”É‚ÉƒAƒNƒZƒX‚·‚é•Ï”‚ğƒ[ƒJƒ‹‚ÉƒLƒƒƒbƒVƒ…
+        int goal = goalNode;
+        
+        while (!openList.Empty()) {
+            auto [topKey, u] = openList.Top();
+            
+            // I—¹ğŒƒ`ƒFƒbƒN (ƒS[ƒ‹‚ª®‡A‚©‚Â TopKey >= GoalKey)
+            // ƒL[”äŠr‚ğæ‚És‚¤iŒy‚¢ˆ——Dæj
+            Key goalKey = CalculateKey(goal);
+            if (topKey >= goalKey) {
+                if (std::abs(nodes[goal].rhs - nodes[goal].g) < EPS) {
+                    break;
+                }
             }
 
-            NodeID u = openList.begin()->second;
-            openList.erase(openList.begin());
-            inOpenList[u] = false;
+            // Pop
+            openList.Pop();
             metrics.nodesExpanded++;
 
-            if (states[u].g > states[u].rhs) {
-                // â–  ã‚±ãƒ¼ã‚¹1: Locally Overconsistent (ã‚³ã‚¹ãƒˆæ”¹å–„)
-                states[u].g = states[u].rhs;
+            // ƒf[ƒ^‚Ìƒ[ƒJƒ‹ƒRƒs[iQÆƒAƒNƒZƒX‚ÌƒRƒXƒgíŒ¸j
+            double u_g = nodes[u].g;
+            double u_rhs = nodes[u].rhs;
+
+            if (u_g > u_rhs) {
+                // --- Locally Overconsistent (’Êí‚ÌA*“IXV) ---
+                nodes[u].g = u_rhs; // g‚ğXV
                 
-                // æœ€é©åŒ–: u ã‹ã‚‰å‡ºã‚‹ã‚¨ãƒƒã‚¸ã®ã¿ã‚’è¦‹ã¦ã€æ”¹å–„ã§ãã‚‹ã‹ãƒã‚§ãƒƒã‚¯
+                // Successors‚ÌXV
                 for (const auto& edge : graph->GetSuccessors(u)) {
-                    NodeID s = edge.target;
-                    // u ã‚’çµŒç”±ã™ã‚‹ã“ã¨ã§ s ã®ã‚³ã‚¹ãƒˆãŒä¸‹ãŒã‚‹å ´åˆã®ã¿æ›´æ–°
-                    if (states[s].rhs > states[u].g + edge.cost) {
-                        states[s].rhs = states[u].g + edge.cost;
-                        states[s].parent = u;
-                        UpdateVertex(s);
+                    int v = edge.target;
+                    // v‚ÌrhsXVƒƒWƒbƒN‚ğƒCƒ“ƒ‰ƒCƒ“‰»‚µ‚Ä‚‘¬‰»
+                    // UpdateVertex(v)‚ğŒÄ‚Ô‚ÆPredecessors‚ğ‘S‘–¸‚µ‚Ä‚µ‚Ü‚¤‚½‚ßA
+                    // ‚±‚±‚Åuu‚©‚ç‚Ì‘JˆÚv‚¾‚¯‚ğg‚Á‚Ä‚‘¬‚ÉXV‚ğ‚İ‚é
+                    
+                    double newRhsCandidate = nodes[u].g + edge.cost;
+                    if (newRhsCandidate < nodes[v].rhs) {
+                        nodes[v].rhs = newRhsCandidate;
+                        nodes[v].parent = u;
+                        // ®‡«‚ª•ö‚ê‚½‚Ì‚ÅƒLƒ…[XV
+                        openList.InsertOrUpdate(v, CalculateKey(v));
                     }
                 }
             } else {
-                // â–  ã‚±ãƒ¼ã‚¹2: Locally Underconsistent (ã‚³ã‚¹ãƒˆæ‚ªåŒ–)
-                states[u].g = INF;
+                // --- Locally Underconsistent (áŠQ•¨”­¶‚È‚Ç‚ÅƒRƒXƒgˆ«‰») ---
+                nodes[u].g = INF_VAL;
                 
-                // u è‡ªèº«ã¨ã€u ã‚’è¦ªã¨ã—ã¦ã„ãŸå¾Œç¶™ãƒãƒ¼ãƒ‰ã‚’æ›´æ–°
-                // ã¾ãš u è‡ªèº« (è‡ªåˆ†è‡ªèº«ã¸ã®ãƒ«ãƒ¼ãƒ—ãƒãƒƒã‚¯ãŒã‚ã‚‹å ´åˆã‚„ã€æ•´åˆæ€§ç¢ºä¿ã®ãŸã‚)
+                // ©•ª©g‚Æ‹ß–T‚ğXV
                 UpdateVertex(u); 
-
+                
                 for (const auto& edge : graph->GetSuccessors(u)) {
-                    NodeID s = edge.target;
-                    
-                    // æœ€é©åŒ–: è¦ªãŒ u ã§ã‚ã£ãŸå ´åˆã®ã¿ã€å†ã‚¹ã‚­ãƒ£ãƒ³ãŒå¿…è¦
-                    if (states[s].parent == u) {
-                        RecalculateRhs(s);
-                        UpdateVertex(s);
-                    }
+                    int v = edge.target;
+                    // –¾¦“I‚ÉUpdateVertex‚ğŒÄ‚Ô•K—v‚ª‚ ‚é
+                    // (u‚ğŒo—R‚µ‚È‚­‚È‚Á‚½‚½‚ßA‘¼‚Ìƒ‹[ƒg‚ğ’T‚·•K—v‚ª‚ ‚é‚©‚ç)
+                    UpdateVertex(v);
                 }
             }
         }
 
         metrics.runtimeSeconds = timer.GetElapsedSeconds();
-        metrics.pathCost = states[goalNode].g;
-        return states[goalNode].g != INF;
+        metrics.pathCost = nodes[goalNode].g;
+        return nodes[goalNode].g != INF_VAL;
     }
 
-    // ç’°å¢ƒå¤‰åŒ–æ™‚ã®é€šçŸ¥ (Figure 7: Main loop logic adapted for single node change)
-    // ãƒãƒ¼ãƒ‰ u ã®é€šè¡Œå¯å¦ãŒå¤‰ã‚ã£ãŸã¨ãã«å‘¼ã°ã‚Œã‚‹
-    virtual void NotifyObstacleChange(NodeID u, bool isBlocked) {
-        // ã‚°ãƒªãƒƒãƒ‰ã‚°ãƒ©ãƒ•ã§ãƒãƒ¼ãƒ‰ u ãŒå¤‰åŒ–ã™ã‚‹ã¨ã€
-        // 1. u ã«å…¥ã‚‹ã‚¨ãƒƒã‚¸ (v->u) ã®ã‚³ã‚¹ãƒˆå¤‰åŒ–
-        // 2. u ã‹ã‚‰å‡ºã‚‹ã‚¨ãƒƒã‚¸ (u->v) ã®ã‚³ã‚¹ãƒˆå¤‰åŒ–
-        // ã®ä¸¡æ–¹ãŒç™ºç”Ÿã—ã¾ã™ã€‚
-
-        // --- 1. ãƒãƒ¼ãƒ‰ u è‡ªèº«ã®æ›´æ–° (v->u ã®å½±éŸ¿) ---
+    // ŠÂ‹«•Ï‰»‚Ì’Ê’m
+    void NotifyObstacleChange(int u, bool isBlocked) {
+        // ƒm[ƒhu‚Ìó‘Ô‚ª•Ï‚í‚Á‚½
+        // u©g‚ÌXV
         if (isBlocked) {
-            // éšœå®³ç‰©ã«ãªã£ãŸ -> ã‚³ã‚¹ãƒˆç„¡é™å¤§
-            states[u].rhs = INF;
-            states[u].parent = -1;
+            nodes[u].rhs = INF_VAL;
+            nodes[u].parent = -1;
         } else {
-            // éšœå®³ç‰©ãŒæ¶ˆãˆãŸ -> å‘¨å›²ã‹ã‚‰å…¥ã‚Œã‚‹ã‚ˆã†ã«ãªã‚‹ã®ã§å†è¨ˆç®—
-            RecalculateRhs(u);
-        }
-        UpdateVertex(u);
-
-        // --- 2. å‘¨å›²ã®ãƒãƒ¼ãƒ‰ v ã®æ›´æ–° (u->v ã®å½±éŸ¿) ---
-        for (const auto& edge : graph->GetSuccessors(u)) {
-            NodeID v = edge.target;
-            
-            if (isBlocked) {
-                // ã‚³ã‚¹ãƒˆå¢—åŠ  (u->v ãŒåˆ‡æ–­)
-                // v ã®è¦ªãŒ u ã ã£ãŸå ´åˆã®ã¿ã€v ã®ä»£æ›¿ãƒ«ãƒ¼ãƒˆã‚’æ¢ã™å¿…è¦ãŒã‚ã‚‹
-                if (states[v].parent == u) {
-                    RecalculateRhs(v);
-                    UpdateVertex(v);
-                }
-            } else {
-                // ã‚³ã‚¹ãƒˆæ¸›å°‘ (u->v ãŒæ¥ç¶š)
-                // u ã‚’çµŒç”±ã—ã¦ v ã«å®‰ãè¡Œã‘ã‚‹ã‚ˆã†ã«ãªã£ãŸã‹ãƒã‚§ãƒƒã‚¯
-                Cost newCost = states[u].g + edge.cost;
-                if (states[v].rhs > newCost) {
-                    states[v].rhs = newCost;
-                    states[v].parent = u;
-                    UpdateVertex(v);
-                }
+            // áŠQ•¨‚ª‚È‚­‚È‚Á‚½ -> üˆÍ‚©‚ç“ü‚ê‚é‚©ƒ`ƒFƒbƒN
+            // UpdateVertex(u) ‚Æ“¯“™‚¾‚ªAneighbors‚ğŒ©‚é•K—v‚ª‚ ‚é
+            double minRhs = INF_VAL;
+            int bestP = -1;
+            for (const auto& edge : graph->GetPredecessors(u)) {
+                 int pred = edge.target;
+                 if (nodes[pred].g == INF_VAL) continue;
+                 double t = nodes[pred].g + edge.cost;
+                 if (t < minRhs) { minRhs = t; bestP = pred; }
             }
+            nodes[u].rhs = minRhs;
+            nodes[u].parent = bestP;
+        }
+        
+        // u‚ÌƒLƒ…[ó‘ÔXV
+        if (std::abs(nodes[u].g - nodes[u].rhs) > EPS) {
+            openList.InsertOrUpdate(u, CalculateKey(u));
+        } else {
+            openList.Remove(u);
+        }
+
+        // u‚ÉÚ‘±‚µ‚Ä‚¢‚éüˆÍ‚Ìƒm[ƒh‚Ö‚Ì‰e‹¿
+        for (const auto& edge : graph->GetSuccessors(u)) {
+            UpdateVertex(edge.target);
         }
     }
 
-    // çµŒè·¯å¾©å…ƒ
-    std::vector<NodeID> GetPath() const override {
-        std::vector<NodeID> path;
-        if (states[goalNode].g == INF) return path;
+    std::vector<int> GetPath() const override {
+        std::vector<int> path;
+        if (nodes[goalNode].g == INF_VAL) return path;
 
-        NodeID curr = goalNode;
+        int curr = goalNode;
         path.push_back(curr);
 
-        // è¦ªãƒã‚¤ãƒ³ã‚¿ã‚’è¾¿ã‚‹ã ã‘ãªã®ã§é«˜é€Ÿ
-        // ãŸã ã—ã€æ•´åˆæ€§ãŒå´©ã‚Œã¦ã„ã‚‹ä¸€æ™‚çš„ãªçŠ¶æ…‹ã§ã¯ãƒ«ãƒ¼ãƒ—ã™ã‚‹å¯èƒ½æ€§ãŒã‚ã‚‹ã®ã§
-        // å®‰å…¨ã®ãŸã‚ã‚¹ãƒ†ãƒƒãƒ—æ•°åˆ¶é™ãªã©ã‚’å…¥ã‚Œã¦ã‚‚è‰¯ã„
-        while (curr != startNode) {
-            NodeID p = states[curr].parent;
-            if (p == -1 || p == curr) break; // çµŒè·¯ãªã— or ã‚¨ãƒ©ãƒ¼
+        // –³ŒÀƒ‹[ƒv–h~—p‚ÌƒJƒEƒ“ƒ^[
+        int maxStep = (int)nodes.size();
+        int step = 0;
+
+        while (curr != startNode && step++ < maxStep) {
+            int p = nodes[curr].parent;
+            if (p == -1 || p == curr) break;
             curr = p;
             path.push_back(curr);
         }
-
         std::reverse(path.begin(), path.end());
         return path;
     }
