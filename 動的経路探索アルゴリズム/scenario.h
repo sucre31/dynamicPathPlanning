@@ -4,6 +4,8 @@
 #include <vector>
 #include <string>
 #include <random>
+#include <fstream>
+#include <sstream>
 
 // 1縺､縺ｮ螟画峩繧､繝吶Φ繝・
 struct MapEvent {
@@ -11,10 +13,14 @@ struct MapEvent {
     bool blocked;
 };
 
-// 1縺､縺ｮ螳滄ｨ薙せ繝・ャ繝・
+// 1縺､縺ｮ螳滄ｨ薙せ繝・・ｽ・ｽ繝・
 struct SimulationStep {
     std::string name;
     std::vector<MapEvent> events;
+    bool hasNewStart = false;
+    bool hasNewGoal = false;
+    NodeID newStart = -1;
+    NodeID newGoal = -1;
 };
 
 class Scenario {
@@ -29,22 +35,22 @@ public:
     Scenario(std::string n, int w, int h, NodeID s, NodeID g) 
         : name(n), width(w), height(h), startNode(s), goalNode(g) {}
 
-    // 9. 16x16 陞ｺ譌玖ｿｷ霍ｯ (Spiral Maze) [螳悟・菫ｮ豁｣迚・
-    // 繝ｭ繧ｸ繝・け螟画峩: 螢・・鄂ｮ縺ｧ縺ｯ縺ｪ縺上碁夊ｷｯ繧呈侍繧九肴婿蠑上↓螟画峩縺励∫｢ｺ螳溘↓繝代せ繧帝壹＠縺ｾ縺吶・
-    // 螟門捉縺九ｉ荳ｭ蠢・∈縲√＄繧九＄繧九→蝗槭ｋ荳譛ｬ驕薙ｒ逕滓・縺励∪縺吶・
+    // 9. 16x16 陞ｺ譌玖ｿｷ霍ｯ (Spiral Maze) [螳鯉ｿｽE菫ｮ豁｣迚・
+    // 繝ｭ繧ｸ繝・・ｽ・ｽ螟画峩: 螢・・ｽE鄂ｮ縺ｧ縺ｯ縺ｪ縺上碁夊ｷｯ繧呈侍繧九肴婿蠑上↓螟画峩縺励∫｢ｺ螳溘↓繝代せ繧帝壹＠縺ｾ縺吶・
+    // 螟門捉縺九ｉ荳ｭ蠢・・ｽ・ｽ縲√＄繧九＄繧九→蝗槭ｋ荳譛ｬ驕薙ｒ逕滂ｿｽE縺励∪縺吶・
     static Scenario CreateSpiralMaze16() {
         int size = 16;
         // 繧ｹ繧ｿ繝ｼ繝・0,0) -> 繧ｴ繝ｼ繝ｫ(荳ｭ螟ｮ 7,8)
         Scenario s("16x16 Spiral Maze", size, size, 0, 7 + 8 * size);
 
-        // 1. 縺ｾ縺壼・蝓九ａ縺吶ｋ
+        // 1. 縺ｾ縺夲ｿｽE蝓九ａ縺吶ｋ
         for(int y=0; y<size; ++y) {
             for(int x=0; x<size; ++x) {
                 s.initialObstacles.push_back({x, y, true});
             }
         }
 
-        // 2. 荳遲・嶌縺阪〒騾夊ｷｯ繧呈侍繧・(Carve Path)
+        // 2. 荳遲・・ｽ・ｽ縺阪〒騾夊ｷｯ繧呈侍繧・(Carve Path)
         // 蠎ｧ讓吶Μ繧ｹ繝医ｒ菴懊ｊ縲√◎繧後ｒ縲碁囿螳ｳ迚ｩ縺ｪ縺・false)縲阪↓險ｭ螳壹☆繧・
         auto carve = [&](int x1, int y1, int x2, int y2) {
             if (x1 == x2) { // 邵ｦ謗倥ｊ
@@ -58,21 +64,21 @@ public:
             }
         };
 
-        // 陞ｺ譌狗憾縺ｫ騾夊ｷｯ繧剃ｽ懈・
+        // 陞ｺ譌狗憾縺ｫ騾夊ｷｯ繧剃ｽ懶ｿｽE
         // (0,0) -> (15,0) -> (15,15) -> (0,15) -> (0,2) -> (13,2) -> (13,13) -> (2,13) -> (2,4) ...
-        // 螢√・蜴壹＆繧堤｢ｺ菫昴☆繧九◆繧√・繝槭せ髢馴囈縺ｧ謚倥ｊ霑斐＠縺ｾ縺・
+        // 螢・ｿｽE蜴壹＆繧堤｢ｺ菫昴☆繧九◆繧√・繝槭せ髢馴囈縺ｧ謚倥ｊ霑斐＠縺ｾ縺・
         
         carve(0, 0, 15, 0);   // 荳願ｾｺ (蜿ｳ縺ｸ)
         carve(15, 0, 15, 15); // 蜿ｳ霎ｺ (荳九∈)
         carve(15, 15, 0, 15); // 荳玖ｾｺ (蟾ｦ縺ｸ)
         carve(0, 15, 0, 2);   // 蟾ｦ霎ｺ (荳翫∈) 窶ｻ(0,0)縺ｾ縺ｧ縺ｯ謌ｻ繧峨↑縺・
 
-        carve(0, 2, 13, 2);   // 蜀・・縺ｸ (蜿ｳ縺ｸ)
+        carve(0, 2, 13, 2);   // 蜀・・ｽE縺ｸ (蜿ｳ縺ｸ)
         carve(13, 2, 13, 13); // (荳九∈)
         carve(13, 13, 2, 13); // (蟾ｦ縺ｸ)
         carve(2, 13, 2, 4);   // (荳翫∈)
 
-        carve(2, 4, 11, 4);   // 縺輔ｉ縺ｫ蜀・・
+        carve(2, 4, 11, 4);   // 縺輔ｉ縺ｫ蜀・・ｽE
         carve(11, 4, 11, 11); 
         carve(11, 11, 4, 11);
         carve(4, 11, 4, 6);
@@ -85,7 +91,8 @@ public:
         // 荳ｭ螟ｮ縺ｸ縺ｮ蜈･繧雁哨莉倩ｿ代ｒ荳迸ｬ蝪槭＄
         SimulationStep step1;
         step1.name = "Block Inner Spiral";
-        step1.events.push_back({9, 6, true}); // 騾夊ｷｯ繧帝・譁ｭ
+        step1.events.push_back({9, 6, true}); // 騾夊ｷｯ繧抵ｿｽE譁ｭ
+        s.steps.clear();
         s.steps.push_back(step1);
 
         SimulationStep step2;
@@ -97,8 +104,8 @@ public:
     }
 
     // 10. 64x64 逍弱↑譽ｮ (Sparse Forest)
-    // HPA*縺ｮ蠑ｱ轤ｹ・域ｺ匁怙驕ｩ諤ｧ・峨ｒ遯√￥繝槭ャ繝励・
-    // 譛ｨ縲・・髢薙ｒ縲檎峩邱夂噪縲阪↓謚懊￠繧帰*縺ｫ蟇ｾ縺励？PA*縺ｯ縲後け繝ｩ繧ｹ繧ｿ蠅・阜縲阪ｒ邨檎罰縺吶ｋ縺溘ａ繧ｫ繧ｯ繧ｫ繧ｯ縺励∪縺吶・
+    // HPA*縺ｮ蠑ｱ轤ｹ・ｽE・ｽ貅匁怙驕ｩ諤ｧ・ｽE・ｽ繧堤ｪ√￥繝槭ャ繝励・
+    // 譛ｨ縲・・ｽE髢薙ｒ縲檎峩邱夂噪縲阪↓謚懊￠繧帰*縺ｫ蟇ｾ縺励？PA*縺ｯ縲後け繝ｩ繧ｹ繧ｿ蠅・・ｽ・ｽ縲阪ｒ邨檎罰縺吶ｋ縺溘ａ繧ｫ繧ｯ繧ｫ繧ｯ縺励∪縺吶・
     static Scenario CreateForest64() {
         int size = 64;
         Scenario s("64x64 Sparse Forest", size, size, 0, size * size - 1);
@@ -106,14 +113,14 @@ public:
         std::mt19937 gen(999);
         std::uniform_real_distribution<> dis(0.0, 1.0);
 
-        // 繧ｹ繧ｿ繝ｼ繝医・繧ｴ繝ｼ繝ｫ蜻ｨ霎ｺ縺ｯ遒ｺ螳溘↓遨ｺ縺代ｋ
+        // 繧ｹ繧ｿ繝ｼ繝茨ｿｽE繧ｴ繝ｼ繝ｫ蜻ｨ霎ｺ縺ｯ遒ｺ螳溘↓遨ｺ縺代ｋ
         auto isSafe = [&](int x, int y) {
             if (x < 5 && y < 5) return true;
             if (x > size-6 && y > size-6) return true;
             return false;
         };
 
-        // 繝ｩ繝ｳ繝繝縺ｫ譛ｨ繧帝・鄂ｮ (蟇・ｺｦ12%遞句ｺｦ縺後ヱ繧ｹ繧呈ｶ医＆縺壹↓驍ｪ鬲斐☆繧狗ｵｶ螯吶↑繝ｩ繧､繝ｳ)
+        // 繝ｩ繝ｳ繝繝縺ｫ譛ｨ繧抵ｿｽE鄂ｮ (蟇・・ｽ・ｽ12%遞句ｺｦ縺後ヱ繧ｹ繧呈ｶ医＆縺壹↓驍ｪ鬲斐☆繧狗ｵｶ螯吶↑繝ｩ繧､繝ｳ)
         for (int y = 0; y < size; ++y) {
             for (int x = 0; x < size; ++x) {
                 if (isSafe(x, y)) continue;
@@ -131,13 +138,14 @@ public:
              int ry = 20 + (int)(dis(gen) * 24);
              step1.events.push_back({rx, ry, true});
         }
+        s.steps.clear();
         s.steps.push_back(step1);
 
         return s;
     }
 
     // 11. 32x32 霑ｷ螳ｮ (Labyrinth)
-    // 蜈ｸ蝙狗噪縺ｪ霑ｷ霍ｯ讒矩縲ょ・蟯舌′螟壹￥縲√ヲ繝･繝ｼ繝ｪ繧ｹ繝・ぅ繝・け縺悟柑縺阪↓縺上＞縲・
+    // 蜈ｸ蝙狗噪縺ｪ霑ｷ霍ｯ讒矩縲ゑｿｽE蟯舌′螟壹￥縲√ヲ繝･繝ｼ繝ｪ繧ｹ繝・・ｽ・ｽ繝・・ｽ・ｽ縺悟柑縺阪↓縺上＞縲・
     static Scenario CreateLabyrinth32() {
         int size = 32;
         Scenario s("32x32 Labyrinth", size, size, 1 + size, (size-2) + (size-2)*size); // (1,1) -> (30,30)
@@ -148,7 +156,7 @@ public:
                 s.initialObstacles.push_back({x, y, true});
 
         // 2. 譽貞偵＠豕・邁｡譏・縺ｧ驕薙ｒ謗倥ｋ
-        // (螂・焚蠎ｧ讓吶ｒ騾夊ｷｯ縺ｫ縺吶ｋ)
+        // (螂・・ｽ・ｽ蠎ｧ讓吶ｒ騾夊ｷｯ縺ｫ縺吶ｋ)
         for(int y=1; y<size-1; y+=2) {
             for(int x=1; x<size-1; x+=2) {
                 s.initialObstacles.push_back({x, y, false}); // 譟ｱ繧貞炎繧・
@@ -161,15 +169,16 @@ public:
             }
         }
         
-        // 螟門捉縺ｯ螢√・縺ｾ縺ｾ邯ｭ謖√＆繧後※縺・ｋ縺ｯ縺・
+        // 螟門捉縺ｯ螢・ｿｽE縺ｾ縺ｾ邯ｭ謖√＆繧後※縺・・ｽ・ｽ縺ｯ縺・
 
-        // 蜍慕噪繧､繝吶Φ繝・ 螢√ｒ遐ｴ螢翫＠縺ｦ繧ｷ繝ｧ繝ｼ繝医き繝・ヨ菴懈・
+        // 蜍慕噪繧､繝吶Φ繝・ 螢√ｒ遐ｴ螢翫＠縺ｦ繧ｷ繝ｧ繝ｼ繝医き繝・・ｽ・ｽ菴懶ｿｽE
         SimulationStep step1;
         step1.name = "Break Wall (Shortcut)";
-        // 荳ｭ螟ｮ莉倩ｿ代・螢√ｒ螢翫☆
+        // 荳ｭ螟ｮ莉倩ｿ托ｿｽE螢√ｒ螢翫☆
         step1.events.push_back({16, 15, false});
         step1.events.push_back({16, 16, false});
         step1.events.push_back({16, 17, false});
+        s.steps.clear();
         s.steps.push_back(step1);
 
         return s;
@@ -178,20 +187,144 @@ public:
     // --- New scenarios for benchmarking ---
 
     // A* is fast: mostly open field with a few sparse obstacles.
-    static Scenario CreateOpenField32() { return CreateOpenField(32); }
+    static Scenario CreateOpenField16() { return CreateOpenField(16); }
     static Scenario CreateOpenField64() { return CreateOpenField(64); }
     static Scenario CreateOpenField128() { return CreateOpenField(128); }
 
     // HPA* suboptimal: entrances are wide but represented by single transition.
+    static Scenario CreateHPAStarSuboptimal16() { return CreateHPAStarSuboptimal(16); }
     static Scenario CreateHPAStarSuboptimal32() { return CreateHPAStarSuboptimal(32); }
     static Scenario CreateHPAStarSuboptimal64() { return CreateHPAStarSuboptimal(64); }
     static Scenario CreateHPAStarSuboptimal128() { return CreateHPAStarSuboptimal(128); }
 
     // LPA* shines: small localized changes that flip a shortcut.
+    static Scenario CreateDynamicShortcut16() { return CreateDynamicShortcut(16); }
     static Scenario CreateDynamicShortcut32() { return CreateDynamicShortcut(32); }
     static Scenario CreateDynamicShortcut64() { return CreateDynamicShortcut(64); }
     static Scenario CreateDynamicShortcut128() { return CreateDynamicShortcut(128); }
 
+    // File-based scenario loader
+    static Scenario LoadFromFiles(const std::string& name, const std::vector<std::string>& files) {
+        if (files.empty()) return Scenario(name, 0, 0, 0, 0);
+
+        ParsedMap first = ParseMapFile(files[0]);
+        int w = first.w;
+        int h = first.h;
+        NodeID sNode = (first.start >= 0) ? first.start : 0;
+        NodeID gNode = (first.goal >= 0) ? first.goal : (w * h - 1);
+        Scenario s(name, w, h, sNode, gNode);
+
+        // initial obstacles
+        for (int y = 0; y < h; ++y) {
+            for (int x = 0; x < w; ++x) {
+                int id = y * w + x;
+                if (first.blocked[id]) s.initialObstacles.push_back({x, y, true});
+            }
+        }
+
+        ParsedMap prev = first;
+        for (size_t i = 1; i < files.size(); ++i) {
+            ParsedMap cur = ParseMapFile(files[i]);
+            if (cur.w != w || cur.h != h) continue;
+
+            SimulationStep step;
+            step.name = "Step " + std::to_string(i) + ": " + files[i];
+            for (int y = 0; y < h; ++y) {
+                for (int x = 0; x < w; ++x) {
+                    int id = y * w + x;
+                    if (prev.blocked[id] != cur.blocked[id]) {
+                        step.events.push_back({x, y, cur.blocked[id]});
+                    }
+                }
+            }
+                        if (cur.start >= 0 && cur.start != prev.start) {
+                step.hasNewStart = true;
+                step.newStart = cur.start;
+            }
+            if (cur.goal >= 0 && cur.goal != prev.goal) {
+                step.hasNewGoal = true;
+                step.newGoal = cur.goal;
+            }
+            s.steps.push_back(step);
+            prev = cur;
+        }
+        return s;
+    }
+
+    static Scenario CreateFromMap1Files() {
+        return LoadFromFiles("Map1", {"map1-1.txt", "map1-2.txt"});
+    }
+        // HPA* fastest case at 1024x1024 (code-generated)
+    static Scenario CreateHPAFast128() { return CreateHPAFast(128); }
+    static Scenario CreateHPAFast1024() { return CreateHPAFast(1024); }
+
+// ZigZag corridor for 64x64, then open a shortcut.
+    static Scenario CreateZigZagShortcut64() { return CreateZigZagShortcut(64); }
+
+private:
+    static Scenario CreateZigZagShortcut(int size) {
+        Scenario s("ZigZagShortcut", size, size, 0, size * size - 1);
+
+        // Start with all blocked
+        for (int y = 0; y < size; ++y) {
+            for (int x = 0; x < size; ++x) {
+                s.initialObstacles.push_back({x, y, true});
+            }
+        }
+
+        // Carve zigzag corridor: down, right, up, right, down, right...
+        int x = 0;
+        int y = 0;
+        auto open = [&](int ox, int oy) {
+            if (ox >= 0 && ox < size && oy >= 0 && oy < size)
+                s.initialObstacles.push_back({ox, oy, false});
+        };
+
+        // Initial column down
+        for (y = 0; y < size; ++y) open(x, y);
+
+        int band = 6; // vertical band height
+        int step = 0;
+        x = 0;
+        y = size - 1;
+        while (x < size - 1) {
+            // move right by 4
+            int nextX = std::min(size - 1, x + 4);
+            for (int xx = x; xx <= nextX; ++xx) open(xx, y);
+            x = nextX;
+
+            // move up or down in a band
+            if (step % 2 == 0) {
+                int top = std::max(0, y - band);
+                for (int yy = y; yy >= top; --yy) open(x, yy);
+                y = top;
+            } else {
+                int bottom = std::min(size - 1, y + band);
+                for (int yy = y; yy <= bottom; ++yy) open(x, yy);
+                y = bottom;
+            }
+            step++;
+        }
+
+        // ensure goal area open
+        for (int yy = size - 3; yy < size; ++yy)
+            for (int xx = size - 3; xx < size; ++xx)
+                open(xx, yy);
+
+        // Step: open a shortcut (a diagonal-ish corridor) after initial path
+        SimulationStep step1;
+        step1.name = "Open Shortcut";
+        int mid = size / 2;
+        for (int i = 1; i < size - 1; ++i) {
+            int sx = i;
+            int sy = std::max(1, std::min(size - 2, mid + (i / 4) - 4));
+            step1.events.push_back({sx, sy, false});
+        }
+        s.steps.clear();
+        s.steps.push_back(step1);
+
+        return s;
+    }
 private:
     static Scenario CreateOpenField(int size) {
         Scenario s("OpenField", size, size, 0, size * size - 1);
@@ -250,6 +383,7 @@ private:
             step1.events.push_back({mid - 2, y, true});
             step1.events.push_back({mid + 2, y, true});
         }
+        s.steps.clear();
         s.steps.push_back(step1);
 
         SimulationStep step2;
@@ -263,6 +397,94 @@ private:
             step2.events.push_back({mid + 2, y, true});
         }
         s.steps.push_back(step2);
+
+        return s;
+    }
+
+    struct ParsedMap {
+        int w = 0;
+        int h = 0;
+        NodeID start = -1;
+        NodeID goal = -1;
+        std::vector<bool> blocked;
+    };
+
+    static std::string TrimLine(const std::string& line) {
+        size_t end = line.find_last_not_of("\t ");
+        if (end == std::string::npos) return "";
+        return line.substr(0, end + 1);
+    }
+
+    static ParsedMap ParseMapFile(const std::string& path) {
+        ParsedMap pm;
+        std::ifstream in(path);
+        if (!in) return pm;
+
+        std::vector<std::string> lines;
+        std::string line;
+        while (std::getline(in, line)) {
+            line = TrimLine(line);
+            if (!line.empty()) lines.push_back(line);
+        }
+        if (lines.empty()) return pm;
+
+        pm.h = (int)lines.size();
+        pm.w = (int)lines[0].size();
+        pm.blocked.assign(pm.w * pm.h, false);
+
+        for (int y = 0; y < pm.h; ++y) {
+            if ((int)lines[y].size() != pm.w) continue;
+            for (int x = 0; x < pm.w; ++x) {
+                char c = lines[y][x];
+                int id = y * pm.w + x;
+                if (c == 'S') pm.start = id;
+                if (c == 'G') pm.goal = id;
+                if (c == '1' || c == '#' || c == 'X') pm.blocked[id] = true;
+            }
+        }
+        return pm;
+    }
+
+    static Scenario CreateHPAFast(int size) {
+        Scenario s("HPAFast" + std::to_string(size), size, size, 0, size * size - 1);
+
+        // Build a structured maze: vertical walls with alternating gaps.
+        int gapSize = 6;
+        int wallStep = 8;
+        for (int x = 2; x < size - 2; x += wallStep) {
+            for (int y = 1; y < size - 1; ++y) {
+                s.initialObstacles.push_back({x, y, true});
+            }
+            if ((x / wallStep) % 2 == 0) {
+                for (int y = 2; y < 2 + gapSize; ++y) s.initialObstacles.push_back({x, y, false});
+            } else {
+                for (int y = size - 2 - gapSize; y < size - 2; ++y) s.initialObstacles.push_back({x, y, false});
+            }
+        }
+
+        // Add a wide central highway that HPA* can exploit.
+        int mid = size / 2;
+        for (int x = 0; x < size; ++x) {
+            s.initialObstacles.push_back({x, mid, false});
+            if (mid + 1 < size) s.initialObstacles.push_back({x, mid + 1, false});
+        }
+        for (int y = 0; y < size; ++y) {
+            s.initialObstacles.push_back({mid, y, false});
+            if (mid + 1 < size) s.initialObstacles.push_back({mid + 1, y, false});
+        }
+
+        // Create a horizontal barrier with two gates; closing one gate forces detour.
+        for (int x = 1; x < size - 1; ++x) s.initialObstacles.push_back({x, mid, true});
+        int gate1 = mid;
+        int gate2 = std::min(size - 2, mid + 200);
+        s.initialObstacles.push_back({gate1, mid, false});
+        s.initialObstacles.push_back({gate2, mid, false});
+
+        SimulationStep step1;
+        step1.name = "Block Gate1";
+        step1.events.push_back({gate1, mid, true});
+        s.steps.clear();
+        s.steps.push_back(step1);
 
         return s;
     }

@@ -6,6 +6,7 @@
 #include <queue>
 #include <vector>
 #include <algorithm>
+#include <set>
 
 // HPA* (Hierarchical Path-Finding A*) implementation based on Botea et al.
 // One abstract level (clusters + entrances), with optional path refinement.
@@ -38,9 +39,39 @@ class HPAStar : public ISolver {
     NodeID startNode = -1;
     NodeID goalNode = -1;
     std::vector<NodeID> finalPath;
+    double preprocessSeconds = 0.0;
+    bool precomputed = false;
+    bool dirty = false;
+
+    // Cached base graph (without S/G)
+    std::unordered_map<NodeID, std::vector<Edge>> baseAdj;
+    std::unordered_map<uint64_t, std::vector<NodeID>> baseEdgePaths;
+    std::unordered_set<NodeID> baseAbstractNodes;
 
 public:
     HPAStar(int cs = 10, int entranceW = 6) : clusterSize(cs), entranceThreshold(entranceW) {}
+
+    void Precompute() {
+        preprocessSeconds = 0.0;
+        Timer pre; pre.Start();
+
+        width = GetGrid()->GetWidth();
+        height = GetGrid()->GetHeight();
+        AutoTuneParams();
+
+        BuildClusters();
+        BuildEntrancesAndGraph();
+        BuildIntraEdges();
+
+        // Cache base graph (no S/G)
+        baseAdj = adj;
+        baseEdgePaths = edgePaths;
+        baseAbstractNodes = abstractNodes;
+
+        preprocessSeconds = pre.GetElapsedSeconds();
+        precomputed = true;
+        dirty = false;
+    }
 
     void Initialize(NodeID start, NodeID goal) override {
         startNode = start;
@@ -48,12 +79,20 @@ public:
         finalPath.clear();
         metrics.Reset();
 
-        width = GetGrid()->GetWidth();
-        height = GetGrid()->GetHeight();
+        if (!precomputed) {
+            Precompute();
+        }
 
-        BuildClusters();
-        BuildEntrancesAndGraph();
-        BuildIntraEdges();
+        // Restore base graph and insert S/G only
+        adj = baseAdj;
+        edgePaths = baseEdgePaths;
+        abstractNodes = baseAbstractNodes;
+        for (auto& c : clusters) c.nodes.clear();
+        for (const auto& kv : baseAbstractNodes) {
+            int cid = cellToCluster[kv];
+            clusters[cid].nodes.push_back(kv);
+        }
+
         InsertNode(startNode);
         InsertNode(goalNode);
     }
@@ -105,6 +144,7 @@ public:
     }
 
     std::vector<NodeID> GetPath() const override { return finalPath; }
+    double GetPreprocessSeconds() const { return preprocessSeconds; }
 
 private:
     uint64_t Key(NodeID a, NodeID b) const {
@@ -114,6 +154,27 @@ private:
 
     Cost Heuristic(NodeID a, NodeID b) const {
         return GetGrid()->H(a, b);
+    }
+
+    void AutoTuneParams() {
+        // Heuristic tuning for small maps: reduce preprocessing overhead.
+        int n = std::min(width, height);
+        if (n <= 16) {
+            clusterSize = 4;
+            entranceThreshold = 2;
+        } else if (n <= 32) {
+            clusterSize = 6;
+            entranceThreshold = 3;
+        } else if (n <= 64) {
+            clusterSize = 8;
+            entranceThreshold = 4;
+        } else if (n <= 128) {
+            clusterSize = 10;
+            entranceThreshold = 5;
+        } else {
+            clusterSize = 12;
+            entranceThreshold = 6;
+        }
     }
 
     void BuildClusters() {
@@ -136,6 +197,12 @@ private:
                 }
             }
         }
+    }
+
+    int ClusterIdFromNode(NodeID n) const {
+        auto it = cellToCluster.find(n);
+        if (it == cellToCluster.end()) return -1;
+        return it->second;
     }
 
     bool InCluster(const Cluster& c, int x, int y) const {
@@ -262,6 +329,22 @@ private:
         }
     }
 
+    void BuildIntraEdgesForCluster(const Cluster& c) {
+        if (c.nodes.empty()) return;
+        for (NodeID n : c.nodes) {
+            auto distPrev = BFSWithinCluster(c, n);
+            const auto& dist = distPrev.first;
+            const auto& prev = distPrev.second;
+            for (NodeID m : c.nodes) {
+                if (n == m) continue;
+                auto it = dist.find(m);
+                if (it == dist.end()) continue;
+                std::vector<NodeID> path = ReconstructLocalPath(n, m, prev);
+                AddEdge(n, m, it->second, path);
+            }
+        }
+    }
+
     std::pair<std::unordered_map<NodeID, Cost>, std::unordered_map<NodeID, NodeID>>
     BFSWithinCluster(const Cluster& c, NodeID start) {
         std::queue<NodeID> q;
@@ -325,6 +408,106 @@ private:
             std::reverse(rpath.begin(), rpath.end());
             AddEdge(n, s, it->second, rpath);
         }
+    }
+
+    void RebuildAdjFromEdgePaths() {
+        adj.clear();
+        for (const auto& kv : edgePaths) {
+            NodeID a = static_cast<NodeID>(kv.first >> 32);
+            NodeID b = static_cast<NodeID>(kv.first & 0xffffffffu);
+            Cost cost = (Cost)kv.second.size();
+            if (!kv.second.empty()) cost = (Cost)(kv.second.size() - 1);
+            adj[a].push_back({b, cost});
+        }
+    }
+
+    void RemoveEdgesForClusters(const std::set<int>& clusterIds) {
+        if (clusterIds.empty()) return;
+        std::unordered_set<NodeID> toRemove;
+        for (NodeID n : abstractNodes) {
+            int cid = ClusterIdFromNode(n);
+            if (clusterIds.count(cid)) toRemove.insert(n);
+        }
+
+        // Remove nodes from abstract set
+        for (NodeID n : toRemove) abstractNodes.erase(n);
+
+        // Remove edges touching removed nodes
+        for (auto it = edgePaths.begin(); it != edgePaths.end(); ) {
+            NodeID a = static_cast<NodeID>(it->first >> 32);
+            NodeID b = static_cast<NodeID>(it->first & 0xffffffffu);
+            int ca = ClusterIdFromNode(a);
+            int cb = ClusterIdFromNode(b);
+            if (clusterIds.count(ca) || clusterIds.count(cb)) it = edgePaths.erase(it);
+            else ++it;
+        }
+    }
+
+    void RebuildClusterNodes(const std::set<int>& clusterIds) {
+        for (int cid : clusterIds) clusters[cid].nodes.clear();
+        for (NodeID n : abstractNodes) {
+            int cid = ClusterIdFromNode(n);
+            if (clusterIds.count(cid)) clusters[cid].nodes.push_back(n);
+        }
+    }
+
+public:
+    void NotifyObstacleChange(NodeID node, bool /*blocked*/, bool /*unused*/ = true) {
+        if (!precomputed) { dirty = true; return; }
+
+        Timer pre; pre.Start();
+        int cid = ClusterIdFromNode(node);
+        if (cid < 0) { dirty = true; return; }
+
+        int clustersPerRow = (width + clusterSize - 1) / clusterSize;
+        int clustersPerCol = (height + clusterSize - 1) / clusterSize;
+        int cx = cid % clustersPerRow;
+        int cy = cid / clustersPerRow;
+
+        std::set<int> affected;
+        auto add = [&](int id) { if (id >= 0 && id < (int)clusters.size()) affected.insert(id); };
+        add(cid);
+        if (cx > 0) add(cid - 1);
+        if (cx + 1 < clustersPerRow) add(cid + 1);
+        if (cy > 0) add(cid - clustersPerRow);
+        if (cy + 1 < clustersPerCol) add(cid + clustersPerRow);
+
+        // Work on base graph
+        adj = baseAdj;
+        edgePaths = baseEdgePaths;
+        abstractNodes = baseAbstractNodes;
+
+        RemoveEdgesForClusters(affected);
+        RebuildClusterNodes(affected);
+
+        // Rebuild entrances for affected clusters and neighbors
+        for (int id : affected) {
+            int x = id % clustersPerRow;
+            int y = id / clustersPerRow;
+            if (x + 1 < clustersPerRow) BuildEntrancesBetween(clusters[id], clusters[id + 1], true);
+            if (x > 0) BuildEntrancesBetween(clusters[id - 1], clusters[id], true);
+            if (y + 1 < clustersPerCol) {
+                int downId = id + clustersPerRow;
+                if (downId < (int)clusters.size()) BuildEntrancesBetween(clusters[id], clusters[downId], false);
+            }
+            if (y > 0) {
+                int upId = id - clustersPerRow;
+                if (upId >= 0) BuildEntrancesBetween(clusters[upId], clusters[id], false);
+            }
+        }
+
+        RebuildClusterNodes(affected);
+        for (int id : affected) BuildIntraEdgesForCluster(clusters[id]);
+
+        RebuildAdjFromEdgePaths();
+
+        // Update base cache
+        baseAdj = adj;
+        baseEdgePaths = edgePaths;
+        baseAbstractNodes = abstractNodes;
+
+        preprocessSeconds = pre.GetElapsedSeconds();
+        dirty = false;
     }
 
     void ReconstructPath(const std::unordered_map<NodeID, NodeID>& parent) {

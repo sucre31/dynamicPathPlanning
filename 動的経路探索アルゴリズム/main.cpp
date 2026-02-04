@@ -67,6 +67,10 @@ void RunExperiment(const Scenario& sc) {
     mlpa.SetGraph(&graph);
     hpa.SetGraph(&graph);
 
+    NodeID currentStart = sc.startNode;
+    NodeID currentGoal = sc.goalNode;
+
+
     // --- Step 0: èâä˙íTçı ---
     for (const auto& obs : sc.initialObstacles) {
         graph.SetObstacle(obs.x, obs.y, obs.blocked);
@@ -75,44 +79,46 @@ void RunExperiment(const Scenario& sc) {
     std::cout << "\n--- [Step 0] Initial Search ---\n";
 
     // A* èâä˙íTçı
-    astar.Initialize(sc.startNode, sc.goalNode);
+    astar.Initialize(currentStart, currentGoal);
     astar.ComputePath();
     astar.GetMetrics().Print("A* Initial");
 
     // LPA* èâä˙íTçı
-    lpa.Initialize(sc.startNode, sc.goalNode);
+    lpa.Initialize(currentStart, currentGoal);
     lpa.ComputePath();
     lpa.GetMetrics().Print("LPA* Initial");
 
     // M-A* èâä˙íTçı
-    //mastar.Initialize(sc.startNode, sc.goalNode);
+    //mastar.Initialize(currentStart, currentGoal);
     //mastar.ComputePath();
     //mastar.GetMetrics().Print("m-A* Initial");
     //std::cout << "[m-A* Preprocess] Time: " << std::fixed << std::setprecision(6)
     //          << mastar.GetPreprocessSeconds() * 1000.0 << " ms\n";
 
     // m-LPA* èâä˙íTçı
-    //mlpa.Initialize(sc.startNode, sc.goalNode);
+    //mlpa.Initialize(currentStart, currentGoal);
     //mlpa.ComputePath();
     //mlpa.GetMetrics().Print("m-LPA* Initial");
 
     // HPA* èâä˙íTçı
-    hpa.Initialize(sc.startNode, sc.goalNode);
+    hpa.Initialize(currentStart, currentGoal);
     hpa.ComputePath();
     hpa.GetMetrics().Print("HPA* Initial");
+    std::cout << "[HPA* Preprocess] Time: " << std::fixed << std::setprecision(6)
+              << hpa.GetPreprocessSeconds() * 1000.0 << " ms\n";
 
     // ÉpÉXï\é¶
     std::cout << "\n<A* Initial Path>\n";
-    PrintMap(graph, astar.GetPath(), sc.width, sc.height, sc.startNode, sc.goalNode);
+//    PrintMap(graph, astar.GetPath(), sc.width, sc.height, currentStart, currentGoal);
 
     std::cout << "\n<LPA* Initial Path>\n";
-    PrintMap(graph, lpa.GetPath(), sc.width, sc.height, sc.startNode, sc.goalNode);
+//    PrintMap(graph, lpa.GetPath(), sc.width, sc.height, currentStart, currentGoal);
 
     //std::cout << "\n<m-LPA* Initial Path>\n";
-    //PrintMap(graph, mlpa.GetPath(), sc.width, sc.height, sc.startNode, sc.goalNode);
+//    //PrintMap(graph, mlpa.GetPath(), sc.width, sc.height, currentStart, currentGoal);
 
     std::cout << "\n<HPA* Initial Path>\n";
-    PrintMap(graph, hpa.GetPath(), sc.width, sc.height, sc.startNode, sc.goalNode);
+//    PrintMap(graph, hpa.GetPath(), sc.width, sc.height, currentStart, currentGoal);
 
     // --- Step 1+: ìÆìIÉCÉxÉìÉg ---
     for (size_t i = 0; i < sc.steps.size(); ++i) {
@@ -123,23 +129,31 @@ void RunExperiment(const Scenario& sc) {
             graph.SetObstacle(ev.x, ev.y, ev.blocked);
         }
 
+        bool startGoalChanged = false;
+        if (step.hasNewStart) { currentStart = step.newStart; startGoalChanged = true; }
+        if (step.hasNewGoal) { currentGoal = step.newGoal; startGoalChanged = true; }
+
         // 1. A* Replan
-        astar.Initialize(sc.startNode, sc.goalNode);
+        astar.Initialize(currentStart, currentGoal);
         astar.ComputePath();
         astar.GetMetrics().Print("A* Replan");
 
         // 2. LPA* Replan (ìÆìIçXêV)
         lpa.ResetMetrics();
-        for (const auto& ev : step.events) {
-            int id = ev.y * sc.width + ev.x;
-            lpa.NotifyObstacleChange(id, ev.blocked);
+        if (startGoalChanged) {
+            lpa.Initialize(currentStart, currentGoal);
+        } else {
+            for (const auto& ev : step.events) {
+                int id = ev.y * sc.width + ev.x;
+                lpa.NotifyObstacleChange(id, ev.blocked);
+            }
         }
         lpa.ComputePath();
         lpa.GetMetrics().Print("LPA* Replan");
 
         // 3. m-A* Replan (static method: re-preprocess)
         //mastar.ResetMetrics();
-        //mastar.Initialize(sc.startNode, sc.goalNode);
+        //mastar.Initialize(currentStart, currentGoal);
         //mastar.ComputePath();
         //mastar.GetMetrics().Print("m-A* Replan");
         //std::cout << "[m-A* Preprocess] Time: " << std::fixed << std::setprecision(6)
@@ -156,44 +170,48 @@ void RunExperiment(const Scenario& sc) {
 
         // 5. HPA* Replan (static method: rebuild abstraction)
         hpa.ResetMetrics();
-        hpa.Initialize(sc.startNode, sc.goalNode);
+        bool hpaDidPreprocess = false;
+        if (!step.events.empty()) {
+            hpaDidPreprocess = true;
+            for (const auto& ev : step.events) {
+                int id = ev.y * sc.width + ev.x;
+                hpa.NotifyObstacleChange(id, ev.blocked);
+            }
+        }
+        hpa.Initialize(currentStart, currentGoal);
         hpa.ComputePath();
         hpa.GetMetrics().Print("HPA* Replan");
+        std::cout << "[HPA* Preprocess] Time: " << std::fixed << std::setprecision(6)
+                  << (hpaDidPreprocess ? (hpa.GetPreprocessSeconds() * 1000.0) : 0.0) << " ms\n";
 
         std::cout << "\n<A* Replan Path>\n";
-        PrintMap(graph, astar.GetPath(), sc.width, sc.height, sc.startNode, sc.goalNode);
+//        PrintMap(graph, astar.GetPath(), sc.width, sc.height, currentStart, currentGoal);
 
         std::cout << "\n<LPA* Replan Path>\n";
-        PrintMap(graph, lpa.GetPath(), sc.width, sc.height, sc.startNode, sc.goalNode);
+//        PrintMap(graph, lpa.GetPath(), sc.width, sc.height, currentStart, currentGoal);
 
         //std::cout << "\n<m-A* Replan Path>\n";
-        //PrintMap(graph, mastar.GetPath(), sc.width, sc.height, sc.startNode, sc.goalNode);
+//        //PrintMap(graph, mastar.GetPath(), sc.width, sc.height, currentStart, currentGoal);
 
         //
         
         //std::cout << "\n<m-LPA* Replan Path>\n";
-        //PrintMap(graph, mlpa.GetPath(), sc.width, sc.height, sc.startNode, sc.goalNode);
+//        //PrintMap(graph, mlpa.GetPath(), sc.width, sc.height, currentStart, currentGoal);
 
         std::cout << "\n<HPA* Replan Path>\n";
-        PrintMap(graph, hpa.GetPath(), sc.width, sc.height, sc.startNode, sc.goalNode);
+//        PrintMap(graph, hpa.GetPath(), sc.width, sc.height, currentStart, currentGoal);
     }
 }
 
 int main() {
-    // A* fast cases
-    RunExperiment(Scenario::CreateOpenField32());
-    RunExperiment(Scenario::CreateOpenField64());
-    RunExperiment(Scenario::CreateOpenField128());
+    // 16x16 (map1-1..3)
+    RunExperiment(Scenario::LoadFromFiles("Map1", {"map1-1.txt", "map1-2.txt", "map1-3.txt"}));
 
-    // HPA* suboptimal cases
-    RunExperiment(Scenario::CreateHPAStarSuboptimal32());
-    RunExperiment(Scenario::CreateHPAStarSuboptimal64());
-    RunExperiment(Scenario::CreateHPAStarSuboptimal128());
+    // 32x32 (map2-1..3)
+    RunExperiment(Scenario::LoadFromFiles("Map2", {"map2-1.txt", "map2-2.txt", "map2-3.txt"}));
 
-    // LPA* strong cases
-    RunExperiment(Scenario::CreateDynamicShortcut32());
-    RunExperiment(Scenario::CreateDynamicShortcut64());
-    RunExperiment(Scenario::CreateDynamicShortcut128());
+    // 64x64 (map3-1..3)
+    RunExperiment(Scenario::LoadFromFiles("Map3", {"map3-1.txt", "map3-2.txt", "map3-3.txt"}));
 
     return 0;
 }
