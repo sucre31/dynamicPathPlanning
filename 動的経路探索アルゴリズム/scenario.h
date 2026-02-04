@@ -100,6 +100,7 @@ public:
 
         return s;
     }
+    
 
     // 4. 大規模ランダムマップ (2のべき乗指定を推奨)
     static Scenario CreateLargeRandom(int size, double obstacleProb = 0.2) {
@@ -126,6 +127,40 @@ public:
             int ry = posDis(gen);
             if ((rx == 0 && ry == 0) || (rx == size-1 && ry == size-1)) continue;
             step1.events.push_back({rx, ry, true});
+        }
+        s.steps.push_back(step1);
+
+        return s;
+    }
+
+    // 5. 論文の実験結果(Figure 9, 10等)を再現するためのランダムシナリオ
+    static Scenario CreatePaperBenchmark(int size = 128, double initialDensity = 0.2) {
+        std::string title = "Paper Benchmark (" + std::to_string(size) + "x" + std::to_string(size) + ")";
+        // スタートとゴールは対角線上に配置
+        Scenario s(title, size, size, 0, size * size - 1);
+
+        std::mt19937 gen(42); // 論文の比較再現のためシードを固定
+        std::uniform_real_distribution<> dis(0.0, 1.0);
+        std::uniform_int_distribution<> posDis(0, size - 1);
+
+        // 初期状態: ランダムに障害物を配置
+        for (int y = 0; y < size; ++y) {
+            for (int x = 0; x < size; ++x) {
+                // スタートとゴールの周辺（d-square最小単位）は空けておく
+                if ((x < 2 && y < 2) || (x > size - 3 && y > size - 3)) continue;
+                if (dis(gen) < initialDensity) {
+                    s.initialObstacles.push_back({x, y, true});
+                }
+            }
+        }
+
+        // 論文で強調されている「動的な変化」：既存のパスを遮断するような変化
+        // 画面中央に垂直な壁を一気に作る、あるいは消す
+        SimulationStep step1;
+        step1.name = "Dynamic Obstacle Growth (Mid-Wall)";
+        int midX = size / 2;
+        for (int y = size / 4; y < (3 * size / 4); ++y) {
+            step1.events.push_back({midX, y, true});
         }
         s.steps.push_back(step1);
 

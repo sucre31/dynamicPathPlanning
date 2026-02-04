@@ -8,7 +8,7 @@
 #include <limits>
 
 class LPAStar : public ISolver {
-private:
+protected:
     // 優先度キー
     struct Key {
         double k1; // min(g, rhs) + h
@@ -189,7 +189,7 @@ public:
 
     // 環境変化時の通知 (Figure 7: Main loop logic adapted for single node change)
     // ノード u の通行可否が変わったときに呼ばれる
-    void NotifyObstacleChange(NodeID u, bool isBlocked) {
+    virtual void NotifyObstacleChange(NodeID u, bool isBlocked) {
         // グリッドグラフでノード u が変化すると、
         // 1. u に入るエッジ (v->u) のコスト変化
         // 2. u から出るエッジ (u->v) のコスト変化
