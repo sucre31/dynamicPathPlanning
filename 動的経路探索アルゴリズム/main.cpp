@@ -180,8 +180,20 @@ void RunExperiment(const Scenario& sc) {
 }
 
 int main() {
-    RunExperiment(Scenario::CreateSmallOscillatingShortcut());
-    RunExperiment(Scenario::CreateMidScaleBottleneck64());
-    RunExperiment(Scenario::CreateLargeDynamicWall128());
+    // A* fast cases
+    RunExperiment(Scenario::CreateOpenField32());
+    RunExperiment(Scenario::CreateOpenField64());
+    RunExperiment(Scenario::CreateOpenField128());
+
+    // HPA* suboptimal cases
+    RunExperiment(Scenario::CreateHPAStarSuboptimal32());
+    RunExperiment(Scenario::CreateHPAStarSuboptimal64());
+    RunExperiment(Scenario::CreateHPAStarSuboptimal128());
+
+    // LPA* strong cases
+    RunExperiment(Scenario::CreateDynamicShortcut32());
+    RunExperiment(Scenario::CreateDynamicShortcut64());
+    RunExperiment(Scenario::CreateDynamicShortcut128());
+
     return 0;
 }

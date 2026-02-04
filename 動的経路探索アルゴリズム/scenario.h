@@ -5,13 +5,13 @@
 #include <string>
 #include <random>
 
-// 1つの変更イベント
+// 1つの変更イベンチE
 struct MapEvent {
     int x, y;
     bool blocked;
 };
 
-// 1つの実験ステップ
+// 1つの実験スチE��チE
 struct SimulationStep {
     std::string name;
     std::vector<MapEvent> events;
@@ -29,221 +29,240 @@ public:
     Scenario(std::string n, int w, int h, NodeID s, NodeID g) 
         : name(n), width(w), height(h), startNode(s), goalNode(g) {}
 
-    // 1. 単純な壁 (16x16: m-A*対応)
-    static Scenario CreateSimpleWall() {
-        // m-A* のためにサイズを 10 から 16 (2^4) に変更
+    // 9. 16x16 螺旋迷路 (Spiral Maze) [完�E修正牁E
+    // ロジチE��変更: 壁E�E置ではなく「通路を掘る」方式に変更し、確実にパスを通します、E
+    // 外周から中忁E��、ぐるぐると回る一本道を生�Eします、E
+    static Scenario CreateSpiralMaze16() {
         int size = 16;
-        Scenario s("Simple Wall", size, size, 0, size * size - 1);
-        
-        // 初期障害物: 中央付近
-        s.initialObstacles.push_back({8, 8, true});
+        // スターチE0,0) -> ゴール(中央 7,8)
+        Scenario s("16x16 Spiral Maze", size, size, 0, 7 + 8 * size);
 
+        // 1. まず�E埋めする
+        for(int y=0; y<size; ++y) {
+            for(int x=0; x<size; ++x) {
+                s.initialObstacles.push_back({x, y, true});
+            }
+        }
+
+        // 2. 一筁E��きで通路を掘めE(Carve Path)
+        // 座標リストを作り、それを「障害物なぁEfalse)」に設定すめE
+        auto carve = [&](int x1, int y1, int x2, int y2) {
+            if (x1 == x2) { // 縦掘り
+                int min = std::min(y1, y2);
+                int max = std::max(y1, y2);
+                for(int y=min; y<=max; ++y) s.initialObstacles.push_back({x1, y, false});
+            } else { // 横掘り
+                int min = std::min(x1, x2);
+                int max = std::max(x1, x2);
+                for(int x=min; x<=max; ++x) s.initialObstacles.push_back({x, y1, false});
+            }
+        };
+
+        // 螺旋状に通路を作�E
+        // (0,0) -> (15,0) -> (15,15) -> (0,15) -> (0,2) -> (13,2) -> (13,13) -> (2,13) -> (2,4) ...
+        // 壁�E厚さを確保するため、Eマス間隔で折り返しまぁE
+        
+        carve(0, 0, 15, 0);   // 上辺 (右へ)
+        carve(15, 0, 15, 15); // 右辺 (下へ)
+        carve(15, 15, 0, 15); // 下辺 (左へ)
+        carve(0, 15, 0, 2);   // 左辺 (上へ) ※(0,0)までは戻らなぁE
+
+        carve(0, 2, 13, 2);   // 冁E�Eへ (右へ)
+        carve(13, 2, 13, 13); // (下へ)
+        carve(13, 13, 2, 13); // (左へ)
+        carve(2, 13, 2, 4);   // (上へ)
+
+        carve(2, 4, 11, 4);   // さらに冁E�E
+        carve(11, 4, 11, 11); 
+        carve(11, 11, 4, 11);
+        carve(4, 11, 4, 6);
+
+        carve(4, 6, 9, 6);    // ゴール付迁E
+        carve(9, 6, 9, 8);
+        carve(9, 8, 7, 8);    // ゴール(7,8)へ到遁E
+
+        // 3. 動的イベンチE
+        // 中央への入り口付近を一瞬塞ぐ
         SimulationStep step1;
-        step1.name = "Block Center";
-        step1.events.push_back({7, 7, true});
-        step1.events.push_back({7, 8, true});
+        step1.name = "Block Inner Spiral";
+        step1.events.push_back({9, 6, true}); // 通路を�E断
         s.steps.push_back(step1);
 
         SimulationStep step2;
-        step2.name = "Open Path";
-        step2.events.push_back({7, 7, false});
-        step2.events.push_back({7, 8, false});
+        step2.name = "Open Inner Spiral";
+        step2.events.push_back({9, 6, false}); // 再開
         s.steps.push_back(step2);
 
         return s;
     }
 
-    static Scenario CreateSmallOscillatingShortcut() {
-        int size = 16;
-        Scenario s("16x16 Oscillating Shortcut", size, size, 0, size*size-1);
+    // 10. 64x64 疎な森 (Sparse Forest)
+    // HPA*の弱点�E�準最適性�E�を突くマップ、E
+    // 木、E�E間を「直線的」に抜けるA*に対し、HPA*は「クラスタ墁E��」を経由するためカクカクします、E
+    static Scenario CreateForest64() {
+        int size = 64;
+        Scenario s("64x64 Sparse Forest", size, size, 0, size * size - 1);
 
-        // 基本構造：中央に太い壁
+        std::mt19937 gen(999);
+        std::uniform_real_distribution<> dis(0.0, 1.0);
+
+        // スタート�Eゴール周辺は確実に空ける
+        auto isSafe = [&](int x, int y) {
+            if (x < 5 && y < 5) return true;
+            if (x > size-6 && y > size-6) return true;
+            return false;
+        };
+
+        // ランダムに木を�E置 (寁E��12%程度がパスを消さずに邪魔する絶妙なライン)
         for (int y = 0; y < size; ++y) {
-            if (y == 4 || y == 11) continue; // 2つの隙間
-            s.initialObstacles.push_back({8, y, true});
+            for (int x = 0; x < size; ++x) {
+                if (isSafe(x, y)) continue;
+                if (dis(gen) < 0.12) {
+                    s.initialObstacles.push_back({x, y, true});
+                }
+            }
         }
 
-        // 変化1：上の隙間を塞ぐ
+        // 動的イベンチE 中央エリアで植林活勁E(一気に木が増えめE
+        SimulationStep step1;
+        step1.name = "Sudden Growth";
+        for (int i = 0; i < 50; ++i) {
+             int rx = 20 + (int)(dis(gen) * 24); // 中央 24x24 エリア
+             int ry = 20 + (int)(dis(gen) * 24);
+             step1.events.push_back({rx, ry, true});
+        }
+        s.steps.push_back(step1);
+
+        return s;
+    }
+
+    // 11. 32x32 迷宮 (Labyrinth)
+    // 典型的な迷路構造。�E岐が多く、ヒューリスチE��チE��が効きにくい、E
+    static Scenario CreateLabyrinth32() {
+        int size = 32;
+        Scenario s("32x32 Labyrinth", size, size, 1 + size, (size-2) + (size-2)*size); // (1,1) -> (30,30)
+
+        // 1. 全て壁にする
+        for(int y=0; y<size; ++y) 
+            for(int x=0; x<size; ++x) 
+                s.initialObstacles.push_back({x, y, true});
+
+        // 2. 棒倒し況E簡昁Eで道を掘る
+        // (奁E��座標を通路にする)
+        for(int y=1; y<size-1; y+=2) {
+            for(int x=1; x<size-1; x+=2) {
+                s.initialObstacles.push_back({x, y, false}); // 柱を削めE
+                
+                // 隣接する壁をランダムに1つ削って連結すめE
+                std::mt19937 gen(x + y * size);
+                int dir = gen() % 2; // 右か下へ道を伸ばぁE
+                if (dir == 0 && x+1 < size-1) s.initialObstacles.push_back({x+1, y, false});
+                if (dir == 1 && y+1 < size-1) s.initialObstacles.push_back({x, y+1, false});
+            }
+        }
+        
+        // 外周は壁�Eまま維持されてぁE��はぁE
+
+        // 動的イベンチE 壁を破壊してショートカチE��作�E
+        SimulationStep step1;
+        step1.name = "Break Wall (Shortcut)";
+        // 中央付近�E壁を壊す
+        step1.events.push_back({16, 15, false});
+        step1.events.push_back({16, 16, false});
+        step1.events.push_back({16, 17, false});
+        s.steps.push_back(step1);
+
+        return s;
+    }
+
+    // --- New scenarios for benchmarking ---
+
+    // A* is fast: mostly open field with a few sparse obstacles.
+    static Scenario CreateOpenField32() { return CreateOpenField(32); }
+    static Scenario CreateOpenField64() { return CreateOpenField(64); }
+    static Scenario CreateOpenField128() { return CreateOpenField(128); }
+
+    // HPA* suboptimal: entrances are wide but represented by single transition.
+    static Scenario CreateHPAStarSuboptimal32() { return CreateHPAStarSuboptimal(32); }
+    static Scenario CreateHPAStarSuboptimal64() { return CreateHPAStarSuboptimal(64); }
+    static Scenario CreateHPAStarSuboptimal128() { return CreateHPAStarSuboptimal(128); }
+
+    // LPA* shines: small localized changes that flip a shortcut.
+    static Scenario CreateDynamicShortcut32() { return CreateDynamicShortcut(32); }
+    static Scenario CreateDynamicShortcut64() { return CreateDynamicShortcut(64); }
+    static Scenario CreateDynamicShortcut128() { return CreateDynamicShortcut(128); }
+
+private:
+    static Scenario CreateOpenField(int size) {
+        Scenario s("OpenField", size, size, 0, size * size - 1);
+        // Sparse obstacles away from the main diagonal
+        for (int y = 2; y < size - 2; y += 6) {
+            for (int x = 2; x < size - 2; x += 9) {
+                if ((x + y) % 2 == 0) s.initialObstacles.push_back({x, y, true});
+            }
+        }
+        return s;
+    }
+
+    static Scenario CreateHPAStarSuboptimal(int size) {
+        Scenario s("HPAStarSuboptimal", size, size, 0, size * size - 1);
+
+        int mid = size / 2;
+        // Solid vertical wall except two entrances (each width 5)
+        for (int y = 0; y < size; ++y) {
+            s.initialObstacles.push_back({mid, y, true});
+        }
+        // Entrance near top
+        for (int y = 2; y <= 6 && y < size; ++y) s.initialObstacles.push_back({mid, y, false});
+        // Entrance near bottom
+        for (int y = size - 7; y <= size - 3; ++y) s.initialObstacles.push_back({mid, y, false});
+
+        // Add a small blocker around the mid-height to penalize mid transitions
+        int blockY = size / 2;
+        for (int x = mid + 1; x <= mid + 3 && x < size - 1; ++x) {
+            s.initialObstacles.push_back({x, blockY, true});
+        }
+        return s;
+    }
+
+    static Scenario CreateDynamicShortcut(int size) {
+        Scenario s("DynamicShortcut", size, size, 0, size * size - 1);
+
+        int mid = size / 2;
+        // Two parallel vertical walls with two gaps that toggle
+        for (int y = 0; y < size; ++y) {
+            s.initialObstacles.push_back({mid - 2, y, true});
+            s.initialObstacles.push_back({mid + 2, y, true});
+        }
+        // Initial gaps
+        for (int y = 2; y <= 4 && y < size; ++y) {
+            s.initialObstacles.push_back({mid - 2, y, false});
+            s.initialObstacles.push_back({mid + 2, y, false});
+        }
+        for (int y = size - 5; y <= size - 3; ++y) {
+            s.initialObstacles.push_back({mid - 2, y, false});
+            s.initialObstacles.push_back({mid + 2, y, false});
+        }
+
         SimulationStep step1;
         step1.name = "Close Upper Gap";
-        step1.events.push_back({8, 4, true});
+        for (int y = 2; y <= 4 && y < size; ++y) {
+            step1.events.push_back({mid - 2, y, true});
+            step1.events.push_back({mid + 2, y, true});
+        }
         s.steps.push_back(step1);
 
-        // 変化2：下の隙間を塞いで上を開ける
         SimulationStep step2;
-        step2.name = "Switch Gap";
-        step2.events.push_back({8, 11, true});
-        step2.events.push_back({8, 4, false});
+        step2.name = "Open Upper Gap / Close Lower Gap";
+        for (int y = 2; y <= 4 && y < size; ++y) {
+            step2.events.push_back({mid - 2, y, false});
+            step2.events.push_back({mid + 2, y, false});
+        }
+        for (int y = size - 5; y <= size - 3; ++y) {
+            step2.events.push_back({mid - 2, y, true});
+            step2.events.push_back({mid + 2, y, true});
+        }
         s.steps.push_back(step2);
-
-        return s;
-    }
-
-    static Scenario CreateMidScaleBottleneck64() {
-    int size = 64;
-    Scenario s("64x64 Moving Bottleneck", size, size, 0, size*size-1);
-
-    int wallX = size / 2;
-
-    // 初期：中央に1つだけ gap
-    for (int y = 0; y < size; ++y) {
-        if (y == size / 2) continue;
-        s.initialObstacles.push_back({wallX, y, true});
-    }
-
-    SimulationStep step1;
-    step1.name = "Move Central Gap";
-
-    // 元の gap を塞ぐ
-    step1.events.push_back({wallX, size / 2, true});
-
-    // 新しい gap を同じ壁列に作る
-    step1.events.push_back({wallX, size / 2 + 5, false});
-
-    s.steps.push_back(step1);
-    return s;
-}
-
-
-    static Scenario CreateLargeDynamicWall128() {
-        int size = 128;
-        Scenario s("128x128 Growing Wall", size, size, 0, size*size-1);
-
-        // 初期：薄いランダム障害物
-        std::mt19937 gen(42);
-        std::uniform_real_distribution<> dis(0,1);
-
-        for(int y=0;y<size;y++){
-            for(int x=0;x<size;x++){
-                if((x<3&&y<3)||(x>size-4&&y>size-4)) continue;
-                if(dis(gen)<0.15)
-                    s.initialObstacles.push_back({x,y,true});
-            }
-        }
-
-        // 動的変化：中央に壁が伸びる
-        SimulationStep step1;
-        step1.name = "Vertical Wall Growth";
-        int mx = size/2;
-        for(int y=size/4;y<3*size/4;y++)
-            step1.events.push_back({mx,y,true});
-        s.steps.push_back(step1);
-
-        return s;
-    }
-
-
-
-    // 2. U字型トラップ (32x32: m-A*対応)
-    static Scenario CreateTrap() {
-        int size = 32;
-        Scenario s("U-Shape Trap", size, size, 0, size * size - 1); 
-        
-        // U字の壁を生成
-        for(int x = 10; x <= 22; ++x) {
-            s.initialObstacles.push_back({x, 20, true}); // 底
-        }
-        for(int y = 10; y <= 20; ++y) {
-            s.initialObstacles.push_back({10, y, true});  // 左壁
-            s.initialObstacles.push_back({22, y, true}); // 右壁
-        }
-        
-        SimulationStep step1;
-        step1.name = "Close Trap Exit";
-        step1.events.push_back({16, 10, true}); // 蓋をする
-        s.steps.push_back(step1);
-
-        return s;
-    }
-
-    // 3. ボトルネック (32x32)
-    static Scenario CreateBottleneck() {
-        int size = 32;
-        Scenario s("Bottleneck", size, size, 0, size * size - 1);
-        
-        int wallX = 16;
-        for(int y = 0; y < size; ++y) {
-            if (y != 16) { // 1箇所だけ空ける
-                s.initialObstacles.push_back({wallX, y, true});
-            }
-        }
-        
-        SimulationStep step1;
-        step1.name = "Block the Gap";
-        step1.events.push_back({wallX, 16, true});
-        step1.events.push_back({wallX, size - 1, false}); // 遠くに迂回路を作成
-        s.steps.push_back(step1);
-
-        SimulationStep step2;
-        step2.name = "Block the line";
-        step2.events.push_back({wallX - 1, 16, true});
-        s.steps.push_back(step2); // 不足していた閉じ括弧を修正
-
-        return s;
-    }
-    
-
-    // 4. 大規模ランダムマップ (2のべき乗指定を推奨)
-    static Scenario CreateLargeRandom(int size, double obstacleProb = 0.2) {
-        std::string title = "Random Map (" + std::to_string(size) + "x" + std::to_string(size) + ")";
-        Scenario s(title, size, size, 0, size * size - 1);
-
-        std::mt19937 gen(1234);
-        std::uniform_real_distribution<> dis(0.0, 1.0);
-        std::uniform_int_distribution<> posDis(0, size - 1);
-
-        for (int y = 0; y < size; ++y) {
-            for (int x = 0; x < size; ++x) {
-                if ((x < 5 && y < 5) || (x > size - 6 && y > size - 6)) continue;
-                if (dis(gen) < obstacleProb) {
-                    s.initialObstacles.push_back({x, y, true});
-                }
-            }
-        }
-
-        SimulationStep step1;
-        step1.name = "Random Obstacles Appearance";
-        for (int i = 0; i < 5; ++i) {
-            int rx = posDis(gen);
-            int ry = posDis(gen);
-            if ((rx == 0 && ry == 0) || (rx == size-1 && ry == size-1)) continue;
-            step1.events.push_back({rx, ry, true});
-        }
-        s.steps.push_back(step1);
-
-        return s;
-    }
-
-    // 5. 論文の実験結果(Figure 9, 10等)を再現するためのランダムシナリオ
-    static Scenario CreatePaperBenchmark(int size = 128, double initialDensity = 0.3) {
-        std::string title = "Paper Benchmark (" + std::to_string(size) + "x" + std::to_string(size) + ")";
-        // スタートとゴールは対角線上に配置
-        Scenario s(title, size, size, 0, size * size - 1);
-
-        std::mt19937 gen(42); // 論文の比較再現のためシードを固定
-        std::uniform_real_distribution<> dis(0.0, 1.0);
-        std::uniform_int_distribution<> posDis(0, size - 1);
-
-        // 初期状態: ランダムに障害物を配置
-        for (int y = 0; y < size; ++y) {
-            for (int x = 0; x < size; ++x) {
-                // スタートとゴールの周辺（d-square最小単位）は空けておく
-                if ((x < 2 && y < 2) || (x > size - 3 && y > size - 3)) continue;
-                if (dis(gen) < initialDensity) {
-                    s.initialObstacles.push_back({x, y, true});
-                }
-            }
-        }
-
-        // 論文で強調されている「動的な変化」：既存のパスを遮断するような変化
-        // 画面中央に垂直な壁を一気に作る、あるいは消す
-        SimulationStep step1;
-        step1.name = "Dynamic Obstacle Growth (Mid-Wall)";
-        int midX = size / 2;
-        for (int y = size / 4; y < (3 * size / 4); ++y) {
-            step1.events.push_back({midX, y, true});
-        }
-        s.steps.push_back(step1);
 
         return s;
     }
